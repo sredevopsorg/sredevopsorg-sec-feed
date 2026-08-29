@@ -14,3 +14,9 @@ feeder.log
 
 # Local database
 data/
+
+# Local podman/docker runtime dirs
+.run/
+.tmp/
+.config/
+.local/
