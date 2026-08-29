@@ -14,9 +14,10 @@ The UI mirrors the dark "Live Intelligence Feed" design with:
 
 ## Status
 
-Iteration 2. The feed works end-to-end: live sources are fetched, normalized,
+Iteration 3. The feed works end-to-end: live sources are fetched, normalized,
 enriched (CISA KEV + EPSS), deduplicated, prioritized, persisted to SQLite,
-pushed to the browser over SSE, and rendered in a single-page frontend.
+pushed to the browser over SSE, rendered in a single-page frontend, and urgent
+items trigger alerts via Slack/email/log channels.
 
 ## Stack
 
@@ -27,9 +28,11 @@ pushed to the browser over SSE, and rendered in a single-page frontend.
 | Storage | SQLite archive + in-memory cache with background refresh |
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS |
+| Alerting | Slack webhook / SMTP email / log for urgent items |
+| Deployment | Docker/Podman compose + Kubernetes manifests |
 
-Planned next: PostgreSQL/OpenSearch search backend, OSV.dev enrichment,
-alerting (Slack/email), and Kubernetes deployment manifests.
+Planned next: PostgreSQL/OpenSearch search backend, and OSV.dev +
+distro patch-status enrichment.
 
 ## Sources
 
@@ -62,12 +65,15 @@ alerting (Slack/email), and Kubernetes deployment manifests.
 │   ├── fetcher.py     # Fetching, normalization, caching
 │   ├── enrich.py      # CISA KEV + EPSS enrichment
 │   ├── store.py       # SQLite persistence
-│   └── events.py      # SSE pub/sub broker
+│   ├── events.py      # SSE pub/sub broker
+│   └── alerts.py      # Slack / email / log alerting
 ├── static/
 │   └── index.html     # Single-page frontend
 ├── tests/
 │   ├── test_feed.py   # Unit tests for feed logic
 │   └── test_store.py  # Unit tests for persistence
+├── deploy/
+│   └── k8s/           # Kubernetes manifests (Deployment, Service, PVC, ConfigMap)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
@@ -93,7 +99,7 @@ Open <http://localhost:8000>.
 > are served from SQLite and refresh every 10 minutes; the browser updates via
 > SSE (`/api/events`) and falls back to polling every 5 minutes.
 
-### Docker
+### Docker / Podman
 
 ```bash
 docker compose up --build
@@ -102,6 +108,15 @@ podman-compose up --build
 ```
 
 The SQLite database is stored in the `feed-data` volume.
+
+### Kubernetes
+
+```bash
+kubectl apply -k deploy/k8s
+```
+
+The deployment uses a `ReadWriteOnce` PVC for the SQLite archive and exposes
+the app as a `ClusterIP` service on port 80.
 
 ## API
 
@@ -177,7 +192,7 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 - [x] Enrichment: EPSS, CISA KEV
 - [x] SSE live updates
 - [x] Dockerize the stack
+- [x] Slack / email / log alerts for `urgent` items
+- [x] Kubernetes deployment manifests
 - [ ] PostgreSQL/OpenSearch search backend
 - [ ] OSV.dev and distro patch-status enrichment
-- [ ] Slack / email alerts for `urgent` items
-- [ ] Kubernetes deployment manifests

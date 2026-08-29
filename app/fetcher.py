@@ -609,6 +609,16 @@ async def refresh_feed() -> list[FeedItem]:
                 "count": len(items),
             }
         )
+
+        # Deliver alerts for any urgent items we have not notified about yet.
+        try:
+            from . import alerts
+
+            alerted = await alerts.send_urgent_alerts()
+            if alerted:
+                logger.info("Sent %d urgent alert(s)", len(alerted))
+        except Exception:
+            logger.exception("Alerting failed")
         return CACHE.items
 
 

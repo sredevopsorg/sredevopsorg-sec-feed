@@ -27,6 +27,9 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 docker compose up --build
 # or
 podman-compose up --build
+
+# Deploy to Kubernetes
+kubectl apply -k deploy/k8s
 ```
 
 There is no linter or formatter configured yet. Keep code PEP 8-ish and
@@ -41,6 +44,7 @@ app/fetcher.py     Fetching, parsing, normalization, caching
 app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)
 app/store.py       SQLite persistence and queries
 app/events.py      SSE pub/sub broker
+app/alerts.py      Slack / email / log alerts for urgent items
 static/index.html  Single-page frontend (HTML + CSS + vanilla JS)
 tests/             Unit tests for feed and store logic
 ```
@@ -72,6 +76,8 @@ tests/             Unit tests for feed and store logic
 5. Update the Sources table in `README.md`.
 6. Enrichment (KEV/EPSS) is optional and best-effort; new enrichment goes in
    `app/enrich.py` and must never fail the whole refresh.
+7. Alerting is opt-in. Without `SLACK_WEBHOOK_URL` or SMTP settings, urgent
+   items are logged only. Alert delivery must never break the refresh loop.
 
 ## Feed item contract
 

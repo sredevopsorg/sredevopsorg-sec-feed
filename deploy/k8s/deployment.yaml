@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-feed-web
+  labels:
+    app: security-feed-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: security-feed-web
+  template:
+    metadata:
+      labels:
+        app: security-feed-web
+    spec:
+      containers:
+        - name: feed
+          image: ghcr.io/sredevopsorgagents/security-feed-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: security-feed-web-config
+          env:
+            - name: SECURITY_FEED_DB
+              value: /app/data/feed.db
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: feed-data
+              mountPath: /app/data
+      volumes:
+        - name: feed-data
+          persistentVolumeClaim:
+            claimName: security-feed-web-data

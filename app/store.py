@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS feed_items (
 );
 CREATE INDEX IF NOT EXISTS idx_feed_items_published ON feed_items(published DESC);
 CREATE INDEX IF NOT EXISTS idx_feed_items_urgent ON feed_items(urgent DESC);
+CREATE TABLE IF NOT EXISTS alerted_items (
+    item_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -214,3 +218,35 @@ def seed_if_empty(db_path: str = DB_PATH) -> int:
     if count > 0:
         return 0
     return upsert_items(_sample_items(), db_path=db_path)
+
+
+def unalerted_urgent_items(limit: int = 20, db_path: str = DB_PATH) -> list[dict[str, Any]]:
+    """Return urgent items that have not been alerted yet.
+
+    Sample/fallback rows are excluded once live rows exist.
+    """
+    with _connect(db_path) as conn:
+        live_count = conn.execute("SELECT COUNT(*) FROM feed_items WHERE is_sample=0").fetchone()[0]
+        sample_clause = "AND f.is_sample = 0" if live_count > 0 else ""
+        rows = conn.execute(
+            f"""
+            SELECT f.* FROM feed_items f
+            LEFT JOIN alerted_items a ON a.item_id = f.id
+            WHERE f.urgent = 1 AND a.item_id IS NULL {sample_clause}
+            ORDER BY f.published DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    return [row_to_item(row) for row in rows]
+
+
+def mark_alerted(item_ids: list[str], db_path: str = DB_PATH) -> None:
+    if not item_ids:
+        return
+    now = _now_iso()
+    with _connect(db_path) as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO alerted_items (item_id, created_at) VALUES (?, ?)",
+            [(item_id, now) for item_id in item_ids],
+        )

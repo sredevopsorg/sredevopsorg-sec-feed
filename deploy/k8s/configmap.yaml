@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: security-feed-web-config
+data:
+  # Optional alerting env vars; uncomment and set secrets in a Secret instead.
+  # SLACK_WEBHOOK_URL: ""
+  # ALERT_EMAIL_TO: ""
+  # SMTP_HOST: ""
+  LOG_LEVEL: "INFO"
