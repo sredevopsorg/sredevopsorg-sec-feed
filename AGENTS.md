@@ -5,8 +5,9 @@ repository.
 
 ## Project in one sentence
 
-A FastAPI-backed single-page feed that aggregates, normalizes, and displays
-security advisories, CVEs, and threats for Linux, cloud, and Kubernetes.
+A FastAPI-backed single-page feed that aggregates, normalizes, enriches,
+persists, and displays security advisories, CVEs, and threats for Linux,
+cloud, and Kubernetes.
 
 ## Commands
 
@@ -21,6 +22,9 @@ PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port
 
 # Run tests
 PYTHONPATH=./.pip-packages python3 -m pytest -q
+
+# Run with Docker
+docker compose up --build
 ```
 
 There is no linter or formatter configured yet. Keep code PEP 8-ish and
@@ -31,9 +35,12 @@ readable.
 ```text
 app/main.py        FastAPI routes and app startup
 app/sources.py     Source definitions (add new feeds here)
-app/fetcher.py     Fetching, parsing, normalization, enrichment, caching
+app/fetcher.py     Fetching, parsing, normalization, caching
+app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)
+app/store.py       SQLite persistence and queries
+app/events.py      SSE pub/sub broker
 static/index.html  Single-page frontend (HTML + CSS + vanilla JS)
-tests/test_feed.py Unit tests for pure feed logic
+tests/             Unit tests for feed and store logic
 ```
 
 ## Critical invariants
@@ -44,6 +51,8 @@ tests/test_feed.py Unit tests for pure feed logic
    data when all live sources fail. Preserve that behavior.
 3. **Never block the API on a slow source.** `get_feed()` returns the cached
    feed immediately and refreshes in the background.
+4. **Sample rows must stay hidden once live rows exist.** `store.query_feed()`
+   excludes `is_sample=1` when `is_sample=0` rows are present.
 4. **Respect source rate limits and terms.** All HTTP calls must keep the
    current `USER_AGENT` and `HTTP_TIMEOUT`.
 5. **Keep tests passing.** Every change to parsing/enrichment should add or
@@ -59,6 +68,8 @@ tests/test_feed.py Unit tests for pure feed logic
    (see `_is_relevant()`).
 4. Add a unit test for the normalization/filtering logic with fixture data.
 5. Update the Sources table in `README.md`.
+6. Enrichment (KEV/EPSS) is optional and best-effort; new enrichment goes in
+   `app/enrich.py` and must never fail the whole refresh.
 
 ## Feed item contract
 
@@ -73,6 +84,9 @@ Every item must be normalized to the `FeedItem` dataclass in
 - `cves` — list of uppercase CVE IDs, e.g. `["CVE-2024-21626"]`
 - `severity` — `critical` | `high` | `medium` | `low` | `unknown`
 - `urgent` — boolean, drives the red dot in the UI
+- `kev` — true when a CVE is in CISA's Known Exploited Vulnerabilities catalog
+- `epss_score` — FIRST EPSS score when available
+- `is_sample` — true for fallback/sample rows
 
 The API returns these via `item_to_dict()`, which also computes `time_ago`.
 

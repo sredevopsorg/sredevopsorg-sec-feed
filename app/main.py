@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .fetcher import CACHE, get_feed, item_to_dict, refresh_feed
+from . import store
+from .events import broker
+from .fetcher import CACHE, get_feed, refresh_feed
 from .sources import SOURCES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -21,19 +25,30 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import asyncio
+    # Initialise persistence and make sure there is always something to show,
+    # even before the first live refresh finishes.
+    await asyncio.to_thread(store.init_db)
+    await asyncio.to_thread(store.seed_if_empty)
 
-    # Warm the cache in the background so the first page load is fast.
+    # Warm/refresh the live cache in the background.
     asyncio.create_task(refresh_feed())
     yield
 
 
-app = FastAPI(title="Security Intelligence Live Feed", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Security Intelligence Live Feed", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "cache_fetched_at": CACHE.fetched_at.isoformat() if CACHE.fetched_at else None}
+    try:
+        stats = await asyncio.to_thread(store.stats)
+    except Exception:
+        stats = {}
+    return {
+        "status": "ok",
+        "cache_fetched_at": CACHE.fetched_at.isoformat() if CACHE.fetched_at else None,
+        "db_total": stats.get("total"),
+    }
 
 
 @app.get("/api/feed")
@@ -42,13 +57,11 @@ async def api_feed(
     severity: str | None = Query(default=None, description="Filter by severity, e.g. critical"),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict:
-    cache = await get_feed()
-    items = [item_to_dict(item) for item in cache.items]
-    if tag:
-        items = [i for i in items if tag in i["tags"]]
-    if severity:
-        items = [i for i in items if i["severity"] == severity]
-    items = items[:limit]
+    # Make sure a refresh is scheduled if the cache is empty or stale.
+    await get_feed()
+
+    items = await asyncio.to_thread(store.query_feed, tag, severity, limit)
+    cache = CACHE
     return {
         "generated_at": cache.generated_at.isoformat() if cache.generated_at else None,
         "fetched_at": cache.fetched_at.isoformat() if cache.fetched_at else None,
@@ -56,6 +69,47 @@ async def api_feed(
         "count": len(items),
         "items": items,
     }
+
+
+@app.get("/api/items")
+async def api_items(
+    tag: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict:
+    """Search/filter the persistent archive (all stored items)."""
+    items = await asyncio.to_thread(store.query_feed, tag, severity, limit)
+    return {"count": len(items), "items": items}
+
+
+@app.get("/api/stats")
+async def api_stats() -> dict:
+    return await asyncio.to_thread(store.stats)
+
+
+@app.get("/api/events")
+async def api_events() -> StreamingResponse:
+    """Server-Sent Events stream that pushes feed updates to the browser."""
+
+    async def event_stream():
+        queue = broker.subscribe()
+        try:
+            # Confirm the stream is open immediately.
+            yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+        finally:
+            broker.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/sources")

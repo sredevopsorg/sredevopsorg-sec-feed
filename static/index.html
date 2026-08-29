@@ -218,6 +218,7 @@
     .chip-cloud { background: rgba(82, 174, 255, 0.09); color: #52aeff; border-color: rgba(82, 174, 255, 0.22); }
     .chip-kubernetes { background: rgba(124, 132, 255, 0.10); color: #9aa2ff; border-color: rgba(124, 132, 255, 0.26); }
     .chip-exploit { background: rgba(255, 59, 48, 0.10); color: #ff6b61; border-color: rgba(255, 59, 48, 0.28); }
+    .chip-kev { background: rgba(255, 59, 48, 0.16); color: #ff8a80; border-color: rgba(255, 59, 48, 0.45); }
     .chip-patch { background: rgba(191, 160, 88, 0.10); color: #d5b56a; border-color: rgba(191, 160, 88, 0.25); }
     .chip-threat { background: rgba(186, 104, 200, 0.10); color: #ce93d8; border-color: rgba(186, 104, 200, 0.26); }
     .chip-severity-critical { background: rgba(255, 59, 48, 0.14); color: #ff8a80; border-color: rgba(255, 59, 48, 0.4); }
@@ -413,8 +414,25 @@
       alert("Full live feed would open the complete searchable archive" + (qs ? ` filtered by: ${state.tag}` : "") + ".");
     });
 
+    function connectEvents() {
+      const es = new EventSource('/api/events');
+      es.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'feed_updated') {
+            loadFeed();
+          }
+        } catch (_) { /* ignore malformed events */ }
+      };
+      es.onerror = () => {
+        // EventSource reconnects automatically; fallback polling below handles
+        // environments where SSE is not available.
+      };
+    }
+
     loadFeed();
-    setInterval(loadFeed, 60 * 1000);
+    connectEvents();
+    setInterval(loadFeed, 5 * 60 * 1000); // fallback poll every 5 minutes
   </script>
 </body>
 </html>

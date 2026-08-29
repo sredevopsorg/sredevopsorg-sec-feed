@@ -14,8 +14,9 @@ The UI mirrors the dark "Live Intelligence Feed" design with:
 
 ## Status
 
-MVP. The feed works end-to-end: live sources are fetched, normalized,
-deduplicated, prioritized, and served to a single-page frontend.
+Iteration 2. The feed works end-to-end: live sources are fetched, normalized,
+enriched (CISA KEV + EPSS), deduplicated, prioritized, persisted to SQLite,
+pushed to the browser over SSE, and rendered in a single-page frontend.
 
 ## Stack
 
@@ -23,10 +24,12 @@ deduplicated, prioritized, and served to a single-page frontend.
 |---|---|
 | Backend | Python 3.13, FastAPI, httpx, feedparser |
 | Frontend | Single-file HTML/CSS/JS (no build step, no CDN) |
-| Storage | In-memory cache with background refresh |
+| Storage | SQLite archive + in-memory cache with background refresh |
+| Live updates | Server-Sent Events (`/api/events`) with polling fallback |
+| Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS |
 
-Planned post-MVP: PostgreSQL/OpenSearch, SSE live updates, enrichment
-(EPSS, CISA KEV, OSV.dev), and alerting.
+Planned next: PostgreSQL/OpenSearch search backend, OSV.dev enrichment,
+alerting (Slack/email), and Kubernetes deployment manifests.
 
 ## Sources
 
@@ -56,11 +59,17 @@ Planned post-MVP: PostgreSQL/OpenSearch, SSE live updates, enrichment
 ├── app/
 │   ├── main.py        # FastAPI application and API routes
 │   ├── sources.py     # Source definitions
-│   └── fetcher.py     # Fetching, normalization, enrichment, caching
+│   ├── fetcher.py     # Fetching, normalization, caching
+│   ├── enrich.py      # CISA KEV + EPSS enrichment
+│   ├── store.py       # SQLite persistence
+│   └── events.py      # SSE pub/sub broker
 ├── static/
 │   └── index.html     # Single-page frontend
 ├── tests/
-│   └── test_feed.py   # Unit tests for feed logic
+│   ├── test_feed.py   # Unit tests for feed logic
+│   └── test_store.py  # Unit tests for persistence
+├── Dockerfile
+├── docker-compose.yml
 ├── requirements.txt
 ├── README.md
 └── AGENTS.md
@@ -80,9 +89,17 @@ PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port
 
 Open <http://localhost:8000>.
 
-> The first feed refresh runs in the background on startup and can take a few
-> seconds while all sources are fetched concurrently. Subsequent requests are
-> served from cache and refresh every 10 minutes.
+> The first feed refresh runs in the background on startup. Subsequent requests
+> are served from SQLite and refresh every 10 minutes; the browser updates via
+> SSE (`/api/events`) and falls back to polling every 5 minutes.
+
+### Docker
+
+```bash
+docker compose up --build
+```
+
+The SQLite database is stored in the `feed-data` volume.
 
 ## API
 
@@ -90,8 +107,11 @@ Open <http://localhost:8000>.
 |---|---|---|
 | `GET` | `/` | Single-page frontend |
 | `GET` | `/api/feed` | Normalized feed JSON |
+| `GET` | `/api/items` | Search/filter the persistent archive |
+| `GET` | `/api/stats` | Counts by severity/tag |
+| `GET` | `/api/events` | Server-Sent Events stream |
 | `GET` | `/api/sources` | Configured sources |
-| `GET` | `/health` | Cache health |
+| `GET` | `/health` | Cache + DB health |
 
 ### `/api/feed`
 
@@ -124,7 +144,9 @@ curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
   "tags": ["linux", "kubernetes", "cve", "exploit", "patch"],
   "cves": ["CVE-2024-21626"],
   "severity": "critical",
-  "urgent": true
+  "urgent": true,
+  "kev": true,
+  "epss_score": 0.97
 }
 ```
 
@@ -135,7 +157,10 @@ curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
 - **Severity** comes from CVSS when available, otherwise from textual heuristics.
 - **Urgent** items are critical/high-severity and exploitation-related; they
   render the red dot in the UI.
+- **KEV** items are in CISA's Known Exploited Vulnerabilities catalog.
+- **EPSS** is fetched from FIRST when CVEs are present (best-effort).
 - The feed is sorted by `urgent` first, then `published` descending.
+- Sample/fallback rows are only shown while no live rows are available.
 
 ## Tests
 
@@ -146,8 +171,11 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 
 ## Roadmap
 
-- [ ] Persistent store (Postgres + OpenSearch) and search/facet endpoints
-- [ ] Enrichment: EPSS, CISA KEV, OSV.dev, distro patch status
-- [ ] SSE/WebSocket live updates instead of 60s polling
+- [x] Persistent store (SQLite) and search/filter endpoints
+- [x] Enrichment: EPSS, CISA KEV
+- [x] SSE live updates
+- [x] Dockerize the stack
+- [ ] PostgreSQL/OpenSearch search backend
+- [ ] OSV.dev and distro patch-status enrichment
 - [ ] Slack / email alerts for `urgent` items
-- [ ] Dockerize and deploy on Kubernetes
+- [ ] Kubernetes deployment manifests

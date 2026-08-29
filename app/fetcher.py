@@ -110,6 +110,9 @@ class FeedItem:
     cves: list[str] = field(default_factory=list)
     severity: str = "unknown"
     urgent: bool = False
+    kev: bool = False
+    epss_score: float | None = None
+    is_sample: bool = False
 
 
 @dataclass
@@ -234,6 +237,8 @@ def _sample_items() -> list[FeedItem]:
     ]
 
     items = [FeedItem(**item, id=_hash_item(item["url"], item["title"])) for item in raw]
+    for item in items:
+        item.is_sample = True
     return items
 
 
@@ -576,7 +581,34 @@ async def refresh_feed() -> list[FeedItem]:
             # Always keep the sample feed available if the live feed is tiny.
             if len(items) < 4:
                 items.extend(_sample_items())
-        CACHE = FeedCache(items=_dedupe(items), fetched_at=datetime.now(timezone.utc), generated_at=datetime.now(timezone.utc), errors=errors)
+        items = _dedupe(items)
+
+        # Best-effort enrichment (CISA KEV + FIRST EPSS). Failures are logged
+        # inside enrich_items and never break the feed.
+        from .enrich import enrich_items
+
+        try:
+            items = await enrich_items(items)
+        except Exception:
+            logger.exception("Unexpected enrichment error; continuing with raw items")
+
+        CACHE = FeedCache(items=items, fetched_at=datetime.now(timezone.utc), generated_at=datetime.now(timezone.utc), errors=errors)
+
+        # Persist and notify SSE subscribers.
+        from . import store
+        from .events import broker
+
+        try:
+            await asyncio.to_thread(store.upsert_items, items)
+        except Exception:
+            logger.exception("Failed to persist feed items")
+        await broker.publish(
+            {
+                "type": "feed_updated",
+                "generated_at": CACHE.generated_at.isoformat(),
+                "count": len(items),
+            }
+        )
         return CACHE.items
 
 
@@ -610,6 +642,8 @@ def item_to_dict(item: FeedItem, now: datetime | None = None) -> dict[str, Any]:
         "cves": item.cves,
         "severity": item.severity,
         "urgent": item.urgent,
+        "kev": getattr(item, "kev", False),
+        "epss_score": getattr(item, "epss_score", None),
     }
 
 

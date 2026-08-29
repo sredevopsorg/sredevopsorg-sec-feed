@@ -1,0 +1,13 @@
+services:
+  feed:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - SECURITY_FEED_DB=/app/data/feed.db
+    volumes:
+      - feed-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  feed-data:

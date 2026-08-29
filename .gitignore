@@ -11,3 +11,6 @@ __pycache__/
 
 # Runtime
 feeder.log
+
+# Local database
+data/

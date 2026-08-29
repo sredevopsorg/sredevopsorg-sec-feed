@@ -1,0 +1,7 @@
+.git
+.pip-packages
+.pytest_cache
+__pycache__
+*.pyc
+data
+.venv
