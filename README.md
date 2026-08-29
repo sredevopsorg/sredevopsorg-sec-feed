@@ -29,12 +29,13 @@ channels.
 | Storage | SQLite archive + in-memory cache with background refresh |
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
+| Malware | OpenSSF Malicious Packages (recent OSV reports) |
 | Search | `/api/search` with SQLite fallback or optional OpenSearch |
 | Alerting | Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
-Planned next: PostgreSQL primary store, deeper distro patch-status
-normalization, and a curated UI search box.
+Planned next: PostgreSQL primary store and deeper distro patch-status
+normalization.
 
 ## Sources
 
@@ -47,6 +48,7 @@ normalization, and a curated UI search box.
 | AWS Security Bulletins | RSS | Cloud |
 | CISA Cybersecurity Advisories (topic-filtered) | RSS | Threats |
 | NVD CVE 2.0 (`linux kernel`, `kubernetes`, `cloud`) | JSON API | CVE |
+| OpenSSF Malicious Packages (recent commits) | GitHub API | Supply-chain malware |
 
 ### Notes on source handling
 
@@ -54,6 +56,10 @@ normalization, and a curated UI search box.
   `totalResults` and requests the last page to obtain the newest CVEs.
 - CISA and the Kubernetes blog are broad feeds, so items are filtered for
   Linux/cloud/Kubernetes relevance before entering the feed.
+- OpenSSF Malicious Packages uses the GitHub API and only processes new
+  commits (no 1 GB clone). Set `GITHUB_TOKEN` to avoid unauthenticated rate
+  limits. By default only Go/git ecosystems or packages mentioning
+  Linux/cloud/Kubernetes tooling are included.
 - If a source fails, the rest of the feed continues. If **all** live sources
   fail, the server serves realistic sample items so the UI is always usable.
 
@@ -68,6 +74,7 @@ normalization, and a curated UI search box.
 │   ├── enrich.py      # CISA KEV + EPSS enrichment
 │   ├── osv.py         # OSV.dev enrichment (affected/fixed/severity)
 │   ├── search.py      # Search backend (OpenSearch + SQLite fallback)
+│   └── ossf.py         # OpenSSF Malicious Packages GitHub-API source
 │   ├── store.py       # SQLite persistence
 │   ├── events.py      # SSE pub/sub broker
 │   └── alerts.py      # Slack / email / log alerting

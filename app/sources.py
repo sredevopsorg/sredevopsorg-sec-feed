@@ -93,4 +93,12 @@ SOURCES: list[Source] = [
         tags=frozenset({"cloud", "cve"}),
         max_items=10,
     ),
+    Source(
+        id="ossf-malicious",
+        name="OpenSSF Malicious Packages",
+        kind="ossf-malicious",
+        url="https://api.github.com/repos/ossf/malicious-packages",
+        tags=frozenset({"malware", "supply-chain"}),
+        max_items=30,
+    ),
 ]

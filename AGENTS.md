@@ -44,6 +44,7 @@ app/fetcher.py     Fetching, parsing, normalization, caching
 app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)
 app/osv.py         OSV.dev enrichment (affected/fixed/severity, best-effort)
 app/search.py      Search backend (OpenSearch if configured, SQLite fallback)
+app/ossf.py         OpenSSF Malicious Packages source (GitHub API + cursor)
 app/store.py       SQLite persistence and queries
 app/events.py      SSE pub/sub broker
 app/alerts.py      Slack / email / log alerts for urgent items
@@ -84,6 +85,8 @@ tests/             Unit tests for feed and store logic
    SQLite when `OPENSEARCH_URL` is not configured.
 9. OSV enrichment is best-effort and capped per refresh. Never fetch OSV for
    every CVE in the archive.
+10. The OSSF malicious-packages source must use the GitHub API cursor flow in
+    `app/ossf.py`. Never clone the full repo in the app; it is over 1 GB.
 
 ## Feed item contract
 

@@ -12,10 +12,10 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import fetcher
 from . import search as search_backend
 from . import store
 from .events import broker
-from .fetcher import CACHE, get_feed, refresh_feed
 from .sources import SOURCES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(store.seed_if_empty)
 
     # Warm/refresh the live cache in the background.
-    asyncio.create_task(refresh_feed())
+    asyncio.create_task(fetcher.refresh_feed())
     yield
 
 
@@ -47,7 +47,7 @@ async def health() -> dict:
         stats = {}
     return {
         "status": "ok",
-        "cache_fetched_at": CACHE.fetched_at.isoformat() if CACHE.fetched_at else None,
+        "cache_fetched_at": fetcher.CACHE.fetched_at.isoformat() if fetcher.CACHE.fetched_at else None,
         "db_total": stats.get("total"),
     }
 
@@ -59,10 +59,10 @@ async def api_feed(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict:
     # Make sure a refresh is scheduled if the cache is empty or stale.
-    await get_feed()
+    await fetcher.get_feed()
 
     items = await asyncio.to_thread(store.query_feed, tag, severity, limit)
-    cache = CACHE
+    cache = fetcher.CACHE
     return {
         "generated_at": cache.generated_at.isoformat() if cache.generated_at else None,
         "fetched_at": cache.fetched_at.isoformat() if cache.fetched_at else None,

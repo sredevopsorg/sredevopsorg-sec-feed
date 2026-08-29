@@ -525,6 +525,11 @@ async def _fetch_redhat(source: Source, client: httpx.AsyncClient) -> list[FeedI
 
 
 async def _fetch_source(source: Source) -> list[FeedItem]:
+    if source.kind == "ossf-malicious":
+        from . import ossf
+
+        items, _ = await ossf.fetch_recent_reports()
+        return items[: source.max_items]
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
         if source.kind == "rss":
             return await _fetch_rss(source, client)

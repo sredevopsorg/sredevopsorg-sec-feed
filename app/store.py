@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS alerted_items (
     item_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS source_cursors (
+    source_id TEXT PRIMARY KEY,
+    cursor TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -296,3 +301,18 @@ def search_feed(q: str, tag: str | None = None, severity: str | None = None, lim
     with _connect(db_path) as conn:
         rows = conn.execute(sql, params).fetchall()
     return [row_to_item(row) for row in rows]
+
+
+def get_source_cursor(source_id: str, db_path: str = DB_PATH) -> str | None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT cursor FROM source_cursors WHERE source_id = ?", (source_id,)).fetchone()
+    return row["cursor"] if row else None
+
+
+def set_source_cursor(source_id: str, cursor: str, db_path: str = DB_PATH) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO source_cursors (source_id, cursor, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(source_id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at",
+            (source_id, cursor, _now_iso()),
+        )
