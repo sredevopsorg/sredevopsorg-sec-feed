@@ -1,0 +1,13 @@
+# Python / package cache
+__pycache__/
+*.py[cod]
+.pip-packages/
+.pytest_cache/
+.venv/
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Runtime
+feeder.log
