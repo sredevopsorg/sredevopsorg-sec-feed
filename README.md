@@ -97,6 +97,8 @@ Open <http://localhost:8000>.
 
 ```bash
 docker compose up --build
+# or, with rootless containers available:
+podman-compose up --build
 ```
 
 The SQLite database is stored in the `feed-data` volume.

@@ -23,8 +23,10 @@ PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port
 # Run tests
 PYTHONPATH=./.pip-packages python3 -m pytest -q
 
-# Run with Docker
+# Run with Docker/Podman
 docker compose up --build
+# or
+podman-compose up --build
 ```
 
 There is no linter or formatter configured yet. Keep code PEP 8-ish and
