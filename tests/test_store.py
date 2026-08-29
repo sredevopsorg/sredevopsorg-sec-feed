@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from app.fetcher import FeedItem
-from app.store import init_db, mark_alerted, query_feed, seed_if_empty, stats, unalerted_urgent_items, upsert_items
+from app.store import init_db, mark_alerted, query_feed, search_feed, seed_if_empty, stats, unalerted_urgent_items, upsert_items
 
 
 def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = frozenset({"linux"}), cves: list[str] | None = None, severity: str = "high", urgent: bool = False) -> FeedItem:
@@ -33,6 +33,15 @@ def test_persist_and_query(tmp_path):
     assert rows[0]["id"] == "b"
     assert rows[0]["tags"] == ["threat"]
     assert rows[0]["urgent"] is True
+
+
+def test_search_feed(tmp_path):
+    db = str(tmp_path / "feed.db")
+    init_db(db)
+    seed_if_empty(db)
+    rows = search_feed("runc", limit=10, db_path=db)
+    assert rows, "expected at least one runc match"
+    assert any("runc" in r["title"].lower() or "runc" in r["summary"].lower() for r in rows)
 
 
 def test_alerted_items(tmp_path):

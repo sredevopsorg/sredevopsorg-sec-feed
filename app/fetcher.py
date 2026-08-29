@@ -113,6 +113,9 @@ class FeedItem:
     kev: bool = False
     epss_score: float | None = None
     is_sample: bool = False
+    osv_affected: list[str] = field(default_factory=list)
+    osv_fixed: list[str] = field(default_factory=list)
+    osv_severity: str | None = None
 
 
 @dataclass
@@ -592,6 +595,15 @@ async def refresh_feed() -> list[FeedItem]:
         except Exception:
             logger.exception("Unexpected enrichment error; continuing with raw items")
 
+        # Best-effort OSV.dev enrichment (affected packages, fixed versions,
+        # severity). Also logs and continues on failure.
+        from .osv import enrich_with_osv
+
+        try:
+            items = await enrich_with_osv(items)
+        except Exception:
+            logger.exception("Unexpected OSV enrichment error; continuing")
+
         CACHE = FeedCache(items=items, fetched_at=datetime.now(timezone.utc), generated_at=datetime.now(timezone.utc), errors=errors)
 
         # Persist and notify SSE subscribers.
@@ -602,6 +614,15 @@ async def refresh_feed() -> list[FeedItem]:
             await asyncio.to_thread(store.upsert_items, items)
         except Exception:
             logger.exception("Failed to persist feed items")
+
+        # Best-effort search indexing (OpenSearch if configured).
+        try:
+            from . import search
+
+            await search.index_items(items)
+        except Exception:
+            logger.exception("Search indexing failed")
+
         await broker.publish(
             {
                 "type": "feed_updated",
@@ -654,6 +675,9 @@ def item_to_dict(item: FeedItem, now: datetime | None = None) -> dict[str, Any]:
         "urgent": item.urgent,
         "kev": getattr(item, "kev", False),
         "epss_score": getattr(item, "epss_score", None),
+        "osv_affected": getattr(item, "osv_affected", []),
+        "osv_fixed": getattr(item, "osv_fixed", []),
+        "osv_severity": getattr(item, "osv_severity", None),
     }
 
 

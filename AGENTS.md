@@ -6,8 +6,8 @@ repository.
 ## Project in one sentence
 
 A FastAPI-backed single-page feed that aggregates, normalizes, enriches,
-persists, and displays security advisories, CVEs, and threats for Linux,
-cloud, and Kubernetes.
+persists, searches, alerts, and displays security advisories, CVEs, and
+threats for Linux, cloud, and Kubernetes.
 
 ## Commands
 
@@ -42,6 +42,8 @@ app/main.py        FastAPI routes and app startup
 app/sources.py     Source definitions (add new feeds here)
 app/fetcher.py     Fetching, parsing, normalization, caching
 app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)
+app/osv.py         OSV.dev enrichment (affected/fixed/severity, best-effort)
+app/search.py      Search backend (OpenSearch if configured, SQLite fallback)
 app/store.py       SQLite persistence and queries
 app/events.py      SSE pub/sub broker
 app/alerts.py      Slack / email / log alerts for urgent items
@@ -78,6 +80,10 @@ tests/             Unit tests for feed and store logic
    `app/enrich.py` and must never fail the whole refresh.
 7. Alerting is opt-in. Without `SLACK_WEBHOOK_URL` or SMTP settings, urgent
    items are logged only. Alert delivery must never break the refresh loop.
+8. Search must work without extra infrastructure. `/api/search` falls back to
+   SQLite when `OPENSEARCH_URL` is not configured.
+9. OSV enrichment is best-effort and capped per refresh. Never fetch OSV for
+   every CVE in the archive.
 
 ## Feed item contract
 

@@ -12,6 +12,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import search as search_backend
 from . import store
 from .events import broker
 from .fetcher import CACHE, get_feed, refresh_feed
@@ -85,6 +86,17 @@ async def api_items(
 @app.get("/api/stats")
 async def api_stats() -> dict:
     return await asyncio.to_thread(store.stats)
+
+
+@app.get("/api/search")
+async def api_search(
+    q: str = Query(default="", description="Search query"),
+    tag: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Search the feed. Uses OpenSearch when configured, otherwise SQLite."""
+    return await search_backend.search(q, tag, severity, limit)
 
 
 @app.get("/api/events")

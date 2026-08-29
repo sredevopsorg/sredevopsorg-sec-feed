@@ -97,6 +97,24 @@
     }
 
     /* Filters ------------------------------------------------------------ */
+    .search-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 4px 0 10px;
+    }
+    .search-input {
+      flex: 1 1 240px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.85rem;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+    .search-input:focus { border-color: var(--accent); }
     .filters {
       display: flex;
       gap: 8px;
@@ -294,6 +312,9 @@
       <div class="live-pill"><span class="live-dot"></span>LIVE</div>
     </header>
 
+    <div class="search-row">
+      <input class="search-input" id="searchInput" type="search" placeholder="Search advisories, CVEs, packages…" autocomplete="off" />
+    </div>
     <div class="filters" id="filters" aria-label="Tag filters">
       <button class="filter-chip active" data-tag="">All</button>
       <button class="filter-chip" data-tag="cve">CVE</button>
@@ -317,7 +338,7 @@
   </div>
 
   <script>
-    const state = { items: [], tag: "", lastSeen: new Set() };
+    const state = { items: [], tag: "", q: "", lastSeen: new Set() };
 
     const $feed = document.getElementById("feed");
     const $count = document.getElementById("feedCount");
@@ -376,8 +397,10 @@
 
     async function loadFeed() {
       try {
-        const url = new URL("/api/feed", window.location.origin);
+        const endpoint = state.q ? "/api/search" : "/api/feed";
+        const url = new URL(endpoint, window.location.origin);
         url.searchParams.set("limit", "60");
+        if (state.q) url.searchParams.set("q", state.q);
         if (state.tag) url.searchParams.set("tag", state.tag);
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -397,6 +420,17 @@
         $errorNote.textContent = `Feed unavailable: ${err.message}. Retrying…`;
       }
     }
+
+    document.getElementById("searchInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        state.q = event.target.value.trim();
+        loadFeed();
+      }
+    });
+    document.getElementById("searchInput").addEventListener("search", (event) => {
+      state.q = event.target.value.trim();
+      loadFeed();
+    });
 
     document.getElementById("filters").addEventListener("click", (event) => {
       const btn = event.target.closest("button[data-tag]");

@@ -14,10 +14,11 @@ The UI mirrors the dark "Live Intelligence Feed" design with:
 
 ## Status
 
-Iteration 3. The feed works end-to-end: live sources are fetched, normalized,
-enriched (CISA KEV + EPSS), deduplicated, prioritized, persisted to SQLite,
-pushed to the browser over SSE, rendered in a single-page frontend, and urgent
-items trigger alerts via Slack/email/log channels.
+Iteration 4. The feed works end-to-end: live sources are fetched, normalized,
+enriched (CISA KEV + EPSS + OSV.dev), deduplicated, prioritized, persisted to
+SQLite, searchable (`/api/search`), pushed to the browser over SSE, rendered
+in a single-page frontend, and urgent items trigger alerts via Slack/email/log
+channels.
 
 ## Stack
 
@@ -27,12 +28,13 @@ items trigger alerts via Slack/email/log channels.
 | Frontend | Single-file HTML/CSS/JS (no build step, no CDN) |
 | Storage | SQLite archive + in-memory cache with background refresh |
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
-| Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS |
+| Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
+| Search | `/api/search` with SQLite fallback or optional OpenSearch |
 | Alerting | Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
-Planned next: PostgreSQL/OpenSearch search backend, and OSV.dev +
-distro patch-status enrichment.
+Planned next: PostgreSQL primary store, deeper distro patch-status
+normalization, and a curated UI search box.
 
 ## Sources
 
@@ -64,6 +66,8 @@ distro patch-status enrichment.
 │   ├── sources.py     # Source definitions
 │   ├── fetcher.py     # Fetching, normalization, caching
 │   ├── enrich.py      # CISA KEV + EPSS enrichment
+│   ├── osv.py         # OSV.dev enrichment (affected/fixed/severity)
+│   ├── search.py      # Search backend (OpenSearch + SQLite fallback)
 │   ├── store.py       # SQLite persistence
 │   ├── events.py      # SSE pub/sub broker
 │   └── alerts.py      # Slack / email / log alerting
@@ -109,6 +113,16 @@ podman-compose up --build
 
 The SQLite database is stored in the `feed-data` volume.
 
+### Optional search stack (OpenSearch + PostgreSQL)
+
+```bash
+docker compose --profile search up --build
+```
+
+Then uncomment `OPENSEARCH_URL=http://opensearch:9200` in the `feed` service
+environment, or export `OPENSEARCH_URL` before running locally. Without
+OpenSearch, `/api/search` falls back to SQLite.
+
 ### Kubernetes
 
 ```bash
@@ -125,6 +139,7 @@ the app as a `ClusterIP` service on port 80.
 | `GET` | `/` | Single-page frontend |
 | `GET` | `/api/feed` | Normalized feed JSON |
 | `GET` | `/api/items` | Search/filter the persistent archive |
+| `GET` | `/api/search?q=...` | Full-text search (OpenSearch or SQLite) |
 | `GET` | `/api/stats` | Counts by severity/tag |
 | `GET` | `/api/events` | Server-Sent Events stream |
 | `GET` | `/api/sources` | Configured sources |
@@ -163,7 +178,10 @@ curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
   "severity": "critical",
   "urgent": true,
   "kev": true,
-  "epss_score": 0.97
+  "epss_score": 0.97,
+  "osv_affected": ["Go:runc"],
+  "osv_fixed": ["1.1.12"],
+  "osv_severity": "high"
 }
 ```
 
@@ -176,6 +194,8 @@ curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
   render the red dot in the UI.
 - **KEV** items are in CISA's Known Exploited Vulnerabilities catalog.
 - **EPSS** is fetched from FIRST when CVEs are present (best-effort).
+- **OSV.dev** adds affected packages, fixed versions, and severity for CVEs
+  (best-effort, capped per refresh).
 - The feed is sorted by `urgent` first, then `published` descending.
 - Sample/fallback rows are only shown while no live rows are available.
 
@@ -194,5 +214,7 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 - [x] Dockerize the stack
 - [x] Slack / email / log alerts for `urgent` items
 - [x] Kubernetes deployment manifests
-- [ ] PostgreSQL/OpenSearch search backend
-- [ ] OSV.dev and distro patch-status enrichment
+- [x] OpenSearch search backend (optional) with SQLite fallback
+- [x] OSV.dev enrichment (affected packages, fixed versions, severity)
+- [ ] PostgreSQL primary store
+- [ ] Distro patch-status normalization

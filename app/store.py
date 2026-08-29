@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS feed_items (
     kev INTEGER NOT NULL DEFAULT 0,
     epss_score REAL,
     is_sample INTEGER NOT NULL DEFAULT 0,
+    osv_affected TEXT NOT NULL DEFAULT '[]',
+    osv_fixed TEXT NOT NULL DEFAULT '[]',
+    osv_severity TEXT,
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL
 );
@@ -64,6 +67,12 @@ def init_db(db_path: str = DB_PATH) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(feed_items)")}
         if "is_sample" not in columns:
             conn.execute("ALTER TABLE feed_items ADD COLUMN is_sample INTEGER NOT NULL DEFAULT 0")
+        if "osv_affected" not in columns:
+            conn.execute("ALTER TABLE feed_items ADD COLUMN osv_affected TEXT NOT NULL DEFAULT '[]'")
+        if "osv_fixed" not in columns:
+            conn.execute("ALTER TABLE feed_items ADD COLUMN osv_fixed TEXT NOT NULL DEFAULT '[]'")
+        if "osv_severity" not in columns:
+            conn.execute("ALTER TABLE feed_items ADD COLUMN osv_severity TEXT")
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -99,6 +108,9 @@ def upsert_items(items: list[FeedItem], db_path: str = DB_PATH) -> int:
                 1 if getattr(item, "kev", False) else 0,
                 getattr(item, "epss_score", None),
                 1 if getattr(item, "is_sample", False) else 0,
+                json.dumps(getattr(item, "osv_affected", []) or []),
+                json.dumps(getattr(item, "osv_fixed", []) or []),
+                getattr(item, "osv_severity", None),
                 now,
                 now,
             )
@@ -108,8 +120,9 @@ def upsert_items(items: list[FeedItem], db_path: str = DB_PATH) -> int:
             """
             INSERT INTO feed_items (id, title, summary, url, source, source_url, published,
                                     tags, cves, severity, urgent, kev, epss_score,
-                                    is_sample, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    is_sample, osv_affected, osv_fixed, osv_severity,
+                                    first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 summary = excluded.summary,
@@ -124,6 +137,9 @@ def upsert_items(items: list[FeedItem], db_path: str = DB_PATH) -> int:
                 kev = excluded.kev,
                 epss_score = excluded.epss_score,
                 is_sample = excluded.is_sample,
+                osv_affected = excluded.osv_affected,
+                osv_fixed = excluded.osv_fixed,
+                osv_severity = excluded.osv_severity,
                 last_seen = excluded.last_seen
             """,
             rows,
@@ -157,6 +173,9 @@ def row_to_item(row: sqlite3.Row, now: datetime | None = None) -> dict[str, Any]
     if row["epss_score"] is not None:
         item.epss_score = row["epss_score"]  # type: ignore[attr-defined]
     item.is_sample = bool(row["is_sample"])
+    item.osv_affected = json.loads(row["osv_affected"] or "[]")
+    item.osv_fixed = json.loads(row["osv_fixed"] or "[]")
+    item.osv_severity = row["osv_severity"]
     return item_to_dict(item, now=now)
 
 
@@ -250,3 +269,30 @@ def mark_alerted(item_ids: list[str], db_path: str = DB_PATH) -> None:
             "INSERT OR IGNORE INTO alerted_items (item_id, created_at) VALUES (?, ?)",
             [(item_id, now) for item_id in item_ids],
         )
+
+
+def search_feed(q: str, tag: str | None = None, severity: str | None = None, limit: int = 50, db_path: str = DB_PATH) -> list[dict[str, Any]]:
+    """Fallback search over title, summary, source, and CVE ids."""
+    if not q:
+        return query_feed(tag=tag, severity=severity, limit=limit, db_path=db_path)
+    like = f"%{q}%"
+    clauses: list[str] = []
+    params: list[Any] = []
+    with _connect(db_path) as conn:
+        live_count = conn.execute("SELECT COUNT(*) FROM feed_items WHERE is_sample=0").fetchone()[0]
+    if live_count > 0:
+        clauses.append("is_sample = 0")
+    clauses.append("(title LIKE ? OR summary LIKE ? OR source LIKE ? OR cves LIKE ?)")
+    params.extend([like, like, like, like])
+    if tag:
+        clauses.append("tags LIKE ?")
+        params.append(f'%"{tag}"%')
+    if severity:
+        clauses.append("severity = ?")
+        params.append(severity)
+    sql = "SELECT * FROM feed_items WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY urgent DESC, published DESC, last_seen DESC LIMIT ?"
+    params.append(int(limit))
+    with _connect(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [row_to_item(row) for row in rows]
