@@ -80,8 +80,10 @@ tests/             Unit tests for feed and store logic
 5. Update the Sources table in `README.md`.
 6. Enrichment (KEV/EPSS) is optional and best-effort; new enrichment goes in
    `app/enrich.py` and must never fail the whole refresh.
-7. Alerting is opt-in. Without `SLACK_WEBHOOK_URL` or SMTP settings, urgent
-   items are logged only. Alert delivery must never break the refresh loop.
+7. Alerting is opt-in. Discord webhook is the planned first alert option
+   (`DISCORD_WEBHOOK_URL`); Slack (`SLACK_WEBHOOK_URL`) and SMTP email are
+   secondary channels. Without any channel configured, urgent items are logged
+   only. Alert delivery must never break the refresh loop.
 8. Search must work without extra infrastructure. `/api/search` falls back to
    SQLite when `OPENSEARCH_URL` is not configured.
 9. OSV enrichment is best-effort and capped per refresh. Never fetch OSV for

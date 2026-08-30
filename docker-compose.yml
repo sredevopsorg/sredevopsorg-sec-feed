@@ -5,6 +5,13 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://feed:feed@postgres:5432/feed
+      # Alerting channels (uncomment and set; prefer a secrets file in prod).
+      # Planned first option:
+      # - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+      # Secondary channels:
+      # - SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+      # - ALERT_EMAIL_TO=security@example.com
+      # - SMTP_HOST=smtp.example.com
       # Uncomment and run `docker compose --profile search up --build` to use
       # the optional OpenSearch search backend.
       # - OPENSEARCH_URL=http://opensearch:9200

@@ -3,7 +3,10 @@ kind: ConfigMap
 metadata:
   name: security-feed-web-config
 data:
-  # Optional alerting env vars; uncomment and set secrets in a Secret instead.
+  # Alerting env vars (optional; prefer a Secret for webhook URLs).
+  # Planned first option: Discord webhook.
+  # DISCORD_WEBHOOK_URL: ""
+  # Secondary channels:
   # SLACK_WEBHOOK_URL: ""
   # ALERT_EMAIL_TO: ""
   # SMTP_HOST: ""

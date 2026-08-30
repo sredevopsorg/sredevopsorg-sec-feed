@@ -31,11 +31,11 @@ alerts via Slack/email/log channels.
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
 | Malware | OpenSSF Malicious Packages (recent OSV reports) |
 | Search | `/api/search` with SQLite fallback or optional OpenSearch |
-| Alerting | Slack webhook / SMTP email / log for urgent items |
+| Alerting | Slack webhook / SMTP email / log for urgent items; Discord webhook planned as first option |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
-Planned next: deeper distro patch-status normalization and OpenSearch
-auto-sync improvements.
+Planned next: Discord webhook alerting as first alert option, deeper distro
+patch-status normalization, and OpenSearch auto-sync improvements.
 
 ## Sources
 
@@ -132,6 +132,19 @@ podman-compose up --build
 ```
 
 The SQLite database is stored in the `feed-data` volume.
+
+### Alerting environment variables
+
+Current channels (opt-in):
+
+| Variable | Channel |
+|---|---|
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook |
+| `ALERT_EMAIL_TO` + `SMTP_HOST` | SMTP email |
+| none | Log-only fallback |
+
+Planned next: `DISCORD_WEBHOOK_URL` will become the first alert option, with
+Slack and email as secondary channels.
 
 ### PostgreSQL + OpenSearch via Compose
 
@@ -237,8 +250,10 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 - [x] Enrichment: EPSS, CISA KEV, OSV.dev
 - [x] SSE live updates
 - [x] Slack / email / log alerts for `urgent` items
+- [ ] Discord webhook alerting as first alert option
 - [x] Docker/Podman compose + Kubernetes manifests
 - [x] OpenSearch search backend (optional) with SQL fallback
 - [x] OpenSSF Malicious Packages source
 - [x] PostgreSQL primary store (SQLite fallback when `DATABASE_URL` unset)
 - [ ] Distro patch-status normalization
+- [ ] OpenSearch auto-sync improvements
