@@ -14,11 +14,11 @@ The UI mirrors the dark "Live Intelligence Feed" design with:
 
 ## Status
 
-Iteration 4. The feed works end-to-end: live sources are fetched, normalized,
+Iteration 5. The feed works end-to-end: live sources are fetched, normalized,
 enriched (CISA KEV + EPSS + OSV.dev), deduplicated, prioritized, persisted to
-SQLite, searchable (`/api/search`), pushed to the browser over SSE, rendered
-in a single-page frontend, and urgent items trigger alerts via Slack/email/log
-channels.
+PostgreSQL (or SQLite locally), searchable (`/api/search`), pushed to the
+browser over SSE, rendered in a single-page frontend, and urgent items trigger
+alerts via Slack/email/log channels.
 
 ## Stack
 
@@ -26,7 +26,7 @@ channels.
 |---|---|
 | Backend | Python 3.13, FastAPI, httpx, feedparser |
 | Frontend | Single-file HTML/CSS/JS (no build step, no CDN) |
-| Storage | SQLite archive + in-memory cache with background refresh |
+| Storage | PostgreSQL primary store, SQLite fallback, in-memory cache |
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
 | Malware | OpenSSF Malicious Packages (recent OSV reports) |
@@ -34,8 +34,8 @@ channels.
 | Alerting | Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
-Planned next: PostgreSQL primary store and deeper distro patch-status
-normalization.
+Planned next: deeper distro patch-status normalization and OpenSearch
+auto-sync improvements.
 
 ## Sources
 
@@ -68,13 +68,15 @@ normalization.
 ```text
 .
 ├── app/
-│   ├── main.py        # FastAPI application and API routes
-│   ├── sources.py     # Source definitions
-│   ├── fetcher.py     # Fetching, normalization, caching
-│   ├── enrich.py      # CISA KEV + EPSS enrichment
-│   ├── osv.py         # OSV.dev enrichment (affected/fixed/severity)
-│   ├── search.py      # Search backend (OpenSearch + SQLite fallback)
-│   └── ossf.py         # OpenSSF Malicious Packages GitHub-API source
+│   ├── main.py           # FastAPI application and API routes
+│   ├── sources.py        # Source definitions
+│   ├── fetcher.py        # Fetching, normalization, caching
+│   ├── enrich.py         # CISA KEV + EPSS enrichment
+│   ├── osv.py            # OSV.dev enrichment (affected/fixed/severity)
+│   ├── search.py         # Search backend (OpenSearch + SQLite fallback)
+│   ├── ossf.py           # OpenSSF Malicious Packages GitHub-API source
+│   ├── store.py          # Storage facade (Postgres or SQLite)
+│   └── postgres_store.py # PostgreSQL storage implementation
 │   ├── store.py       # SQLite persistence
 │   ├── events.py      # SSE pub/sub broker
 │   └── alerts.py      # Slack / email / log alerting
@@ -107,8 +109,19 @@ PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port
 Open <http://localhost:8000>.
 
 > The first feed refresh runs in the background on startup. Subsequent requests
-> are served from SQLite and refresh every 10 minutes; the browser updates via
-> SSE (`/api/events`) and falls back to polling every 5 minutes.
+> are served from the configured store and refresh every 10 minutes; the
+> browser updates via SSE (`/api/events`) and falls back to polling every 5
+> minutes.
+
+### Local PostgreSQL
+
+```bash
+# Without Docker, point the app at any PostgreSQL database:
+export DATABASE_URL=postgresql://feed:feed@localhost:5432/feed
+PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+When `DATABASE_URL` is unset, the app uses SQLite in `./data/feed.db`.
 
 ### Docker / Podman
 
@@ -120,15 +133,20 @@ podman-compose up --build
 
 The SQLite database is stored in the `feed-data` volume.
 
-### Optional search stack (OpenSearch + PostgreSQL)
+### PostgreSQL + OpenSearch via Compose
+
+`docker compose up --build` starts the app plus PostgreSQL. The feed service
+uses `DATABASE_URL=postgresql://feed:feed@postgres:5432/feed`.
+
+To add OpenSearch search, run:
 
 ```bash
 docker compose --profile search up --build
 ```
 
 Then uncomment `OPENSEARCH_URL=http://opensearch:9200` in the `feed` service
-environment, or export `OPENSEARCH_URL` before running locally. Without
-OpenSearch, `/api/search` falls back to SQLite.
+environment. Without OpenSearch, `/api/search` falls back to SQL (Postgres
+`ILIKE` or SQLite `LIKE`).
 
 ### Kubernetes
 
@@ -216,12 +234,11 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 ## Roadmap
 
 - [x] Persistent store (SQLite) and search/filter endpoints
-- [x] Enrichment: EPSS, CISA KEV
+- [x] Enrichment: EPSS, CISA KEV, OSV.dev
 - [x] SSE live updates
-- [x] Dockerize the stack
 - [x] Slack / email / log alerts for `urgent` items
-- [x] Kubernetes deployment manifests
-- [x] OpenSearch search backend (optional) with SQLite fallback
-- [x] OSV.dev enrichment (affected packages, fixed versions, severity)
-- [ ] PostgreSQL primary store
+- [x] Docker/Podman compose + Kubernetes manifests
+- [x] OpenSearch search backend (optional) with SQL fallback
+- [x] OpenSSF Malicious Packages source
+- [x] PostgreSQL primary store (SQLite fallback when `DATABASE_URL` unset)
 - [ ] Distro patch-status normalization

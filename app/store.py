@@ -19,6 +19,17 @@ from .fetcher import FeedItem, _ensure_aware, _sample_items, item_to_dict
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.environ.get("SECURITY_FEED_DB", str(Path(__file__).resolve().parent.parent / "data" / "feed.db"))
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+def _use_postgres() -> bool:
+    return bool(DATABASE_URL)
+
+
+def _pg() -> Any:
+    from . import postgres_store
+
+    return postgres_store
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS feed_items (
@@ -66,6 +77,9 @@ def _connect(db_path: str = DB_PATH) -> sqlite3.Connection:
 
 
 def init_db(db_path: str = DB_PATH) -> None:
+    if _use_postgres():
+        _pg().init_db()
+        return
     with _connect(db_path) as conn:
         conn.executescript(SCHEMA)
         # Lightweight migration for databases created before is_sample existed.
@@ -92,6 +106,8 @@ def _now_iso() -> str:
 
 def upsert_items(items: list[FeedItem], db_path: str = DB_PATH) -> int:
     """Insert or update feed items. Returns the number of rows touched."""
+    if _use_postgres():
+        return _pg().upsert_items(items)
     if not items:
         return 0
     now = _now_iso()
@@ -189,6 +205,8 @@ def query_feed(tag: str | None = None, severity: str | None = None, limit: int =
 
     Sample/fallback rows are only returned while no live rows exist.
     """
+    if _use_postgres():
+        return _pg().query_feed(tag, severity, limit)
     sql = "SELECT * FROM feed_items"
     clauses: list[str] = []
     params: list[Any] = []
@@ -213,6 +231,8 @@ def query_feed(tag: str | None = None, severity: str | None = None, limit: int =
 
 
 def stats(db_path: str = DB_PATH) -> dict[str, Any]:
+    if _use_postgres():
+        return _pg().stats()
     with _connect(db_path) as conn:
         total = conn.execute("SELECT COUNT(*) FROM feed_items").fetchone()[0]
         live = conn.execute("SELECT COUNT(*) FROM feed_items WHERE is_sample=0").fetchone()[0]
@@ -237,6 +257,8 @@ def stats(db_path: str = DB_PATH) -> dict[str, Any]:
 
 def seed_if_empty(db_path: str = DB_PATH) -> int:
     """Insert sample items when the database has no rows (e.g. first boot offline)."""
+    if _use_postgres():
+        return _pg().seed_if_empty()
     with _connect(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM feed_items").fetchone()[0]
     if count > 0:
@@ -249,6 +271,8 @@ def unalerted_urgent_items(limit: int = 20, db_path: str = DB_PATH) -> list[dict
 
     Sample/fallback rows are excluded once live rows exist.
     """
+    if _use_postgres():
+        return _pg().unalerted_urgent_items(limit)
     with _connect(db_path) as conn:
         live_count = conn.execute("SELECT COUNT(*) FROM feed_items WHERE is_sample=0").fetchone()[0]
         sample_clause = "AND f.is_sample = 0" if live_count > 0 else ""
@@ -266,6 +290,9 @@ def unalerted_urgent_items(limit: int = 20, db_path: str = DB_PATH) -> list[dict
 
 
 def mark_alerted(item_ids: list[str], db_path: str = DB_PATH) -> None:
+    if _use_postgres():
+        _pg().mark_alerted(item_ids)
+        return
     if not item_ids:
         return
     now = _now_iso()
@@ -278,6 +305,8 @@ def mark_alerted(item_ids: list[str], db_path: str = DB_PATH) -> None:
 
 def search_feed(q: str, tag: str | None = None, severity: str | None = None, limit: int = 50, db_path: str = DB_PATH) -> list[dict[str, Any]]:
     """Fallback search over title, summary, source, and CVE ids."""
+    if _use_postgres():
+        return _pg().search_feed(q, tag, severity, limit)
     if not q:
         return query_feed(tag=tag, severity=severity, limit=limit, db_path=db_path)
     like = f"%{q}%"
@@ -304,12 +333,17 @@ def search_feed(q: str, tag: str | None = None, severity: str | None = None, lim
 
 
 def get_source_cursor(source_id: str, db_path: str = DB_PATH) -> str | None:
+    if _use_postgres():
+        return _pg().get_source_cursor(source_id)
     with _connect(db_path) as conn:
         row = conn.execute("SELECT cursor FROM source_cursors WHERE source_id = ?", (source_id,)).fetchone()
     return row["cursor"] if row else None
 
 
 def set_source_cursor(source_id: str, cursor: str, db_path: str = DB_PATH) -> None:
+    if _use_postgres():
+        _pg().set_source_cursor(source_id, cursor)
+        return
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO source_cursors (source_id, cursor, updated_at) VALUES (?, ?, ?) "

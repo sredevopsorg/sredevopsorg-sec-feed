@@ -4,17 +4,19 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - SECURITY_FEED_DB=/app/data/feed.db
+      - DATABASE_URL=postgresql://feed:feed@postgres:5432/feed
       # Uncomment and run `docker compose --profile search up --build` to use
       # the optional OpenSearch search backend.
       # - OPENSEARCH_URL=http://opensearch:9200
     volumes:
       - feed-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
-    profiles: ["search"]
     environment:
       - POSTGRES_USER=feed
       - POSTGRES_PASSWORD=feed
@@ -22,7 +24,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U feed"]
+      test: ["CMD-SHELL", "pg_isready -U feed -d feed"]
       interval: 10s
       timeout: 5s
       retries: 5

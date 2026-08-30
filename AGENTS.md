@@ -6,8 +6,8 @@ repository.
 ## Project in one sentence
 
 A FastAPI-backed single-page feed that aggregates, normalizes, enriches,
-persists, searches, alerts, and displays security advisories, CVEs, and
-threats for Linux, cloud, and Kubernetes.
+persists to PostgreSQL (or SQLite), searches, alerts, and displays security
+advisories, CVEs, and threats for Linux, cloud, and Kubernetes.
 
 ## Commands
 
@@ -45,7 +45,8 @@ app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)
 app/osv.py         OSV.dev enrichment (affected/fixed/severity, best-effort)
 app/search.py      Search backend (OpenSearch if configured, SQLite fallback)
 app/ossf.py         OpenSSF Malicious Packages source (GitHub API + cursor)
-app/store.py       SQLite persistence and queries
+app/store.py       Storage facade (delegates to Postgres when DATABASE_URL is set)
+app/postgres_store.py  PostgreSQL storage implementation
 app/events.py      SSE pub/sub broker
 app/alerts.py      Slack / email / log alerts for urgent items
 static/index.html  Single-page frontend (HTML + CSS + vanilla JS)
@@ -87,6 +88,9 @@ tests/             Unit tests for feed and store logic
    every CVE in the archive.
 10. The OSSF malicious-packages source must use the GitHub API cursor flow in
     `app/ossf.py`. Never clone the full repo in the app; it is over 1 GB.
+11. `store.py` is the only storage API callers should use. When `DATABASE_URL`
+    is set it delegates to `postgres_store.py`; otherwise it uses SQLite.
+12. Keep the SQLite path working. Local tests rely on it.
 
 ## Feed item contract
 
