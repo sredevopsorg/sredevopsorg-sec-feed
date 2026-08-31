@@ -68,6 +68,7 @@ patch-status normalization, and OpenSearch auto-sync improvements.
 ```text
 .
 ├── app/
+│   ├── __init__.py       # Package marker
 │   ├── main.py           # FastAPI application and API routes
 │   ├── sources.py        # Source definitions
 │   ├── fetcher.py        # Fetching, normalization, caching
@@ -76,17 +77,18 @@ patch-status normalization, and OpenSearch auto-sync improvements.
 │   ├── search.py         # Search backend (OpenSearch + SQLite fallback)
 │   ├── ossf.py           # OpenSSF Malicious Packages GitHub-API source
 │   ├── store.py          # Storage facade (Postgres or SQLite)
-│   └── postgres_store.py # PostgreSQL storage implementation
-│   ├── store.py       # SQLite persistence
-│   ├── events.py      # SSE pub/sub broker
-│   └── alerts.py      # Slack / email / log alerting
+│   ├── postgres_store.py # PostgreSQL storage implementation
+│   ├── events.py         # SSE pub/sub broker
+│   └── alerts.py         # Slack / email / log alerting
 ├── static/
-│   └── index.html     # Single-page frontend
+│   └── index.html        # Single-page frontend
 ├── tests/
-│   ├── test_feed.py   # Unit tests for feed logic
-│   └── test_store.py  # Unit tests for persistence
+│   ├── test_feed.py      # Unit tests for feed logic
+│   ├── test_osv.py       # Unit tests for OSV enrichment
+│   ├── test_ossf.py      # Unit tests for OpenSSF source
+│   └── test_store.py     # Unit tests for persistence
 ├── deploy/
-│   └── k8s/           # Kubernetes manifests (Deployment, Service, PVC, ConfigMap)
+│   └── k8s/              # Kubernetes manifests (Deployment, Service, PVC, ConfigMap)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
@@ -167,8 +169,19 @@ environment. Without OpenSearch, `/api/search` falls back to SQL (Postgres
 kubectl apply -k deploy/k8s
 ```
 
-The deployment uses a `ReadWriteOnce` PVC for the SQLite archive and exposes
-the app as a `ClusterIP` service on port 80.
+The manifests deploy the feed app plus its PostgreSQL dependency:
+
+- **PostgreSQL** primary store (Deployment + `ReadWriteOnce` PVC + `postgres`
+  ClusterIP service). Credentials and the `DATABASE_URL` connection string
+  live in the `security-feed-web-secrets` Secret.
+- The feed app itself (ClusterIP service on port 80), with a `ReadWriteOnce`
+  PVC retained as the SQLite fallback when `DATABASE_URL` is unset.
+
+**OpenSearch is optional and off by default.** `opensearch.yaml` is included
+in the tree but not applied unless you uncomment it in `kustomization.yaml`
+and uncomment `OPENSEARCH_URL` in `configmap.yaml`. Without it, `/api/search`
+falls back to SQL (Postgres `ILIKE`), so search works without any extra
+infrastructure.
 
 ## API
 

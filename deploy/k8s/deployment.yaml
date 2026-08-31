@@ -14,6 +14,19 @@ spec:
       labels:
         app: security-feed-web
     spec:
+      initContainers:
+        # The app opens a Postgres connection during startup, so wait until
+        # the database is accepting connections.
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -p 5432 -U feed -d feed; do
+                echo "waiting for postgres..."
+                sleep 2
+              done
       containers:
         - name: feed
           image: ghcr.io/sredevopsorgagents/security-feed-web:latest
@@ -27,6 +40,11 @@ spec:
           env:
             - name: SECURITY_FEED_DB
               value: /app/data/feed.db
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: security-feed-web-secrets
+                  key: DATABASE_URL
           readinessProbe:
             httpGet:
               path: /health

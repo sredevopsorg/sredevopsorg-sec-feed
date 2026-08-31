@@ -1,0 +1,84 @@
+# PostgreSQL primary store backing the feed archive.
+# Mirrors the docker-compose `postgres` service.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: security-feed-web-postgres
+  labels:
+    app: security-feed-web
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: security-feed-web
+spec:
+  selector:
+    app: security-feed-web
+    component: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-feed-web-postgres
+  labels:
+    app: security-feed-web
+    component: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: security-feed-web
+      component: postgres
+  template:
+    metadata:
+      labels:
+        app: security-feed-web
+        component: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+          envFrom:
+            - secretRef:
+                name: security-feed-web-secrets
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "feed", "-d", "feed"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "feed", "-d", "feed"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: security-feed-web-postgres

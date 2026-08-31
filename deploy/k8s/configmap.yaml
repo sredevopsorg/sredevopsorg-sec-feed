@@ -10,4 +10,8 @@ data:
   # SLACK_WEBHOOK_URL: ""
   # ALERT_EMAIL_TO: ""
   # SMTP_HOST: ""
+  # Optional OpenSearch search backend. Off by default: uncomment this and add
+  # opensearch.yaml to the kustomization to enable it. Without it, /api/search
+  # falls back to SQL (Postgres ILIKE).
+  # OPENSEARCH_URL: "http://opensearch:9200"
   LOG_LEVEL: "INFO"

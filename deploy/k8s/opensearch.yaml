@@ -1,0 +1,106 @@
+# OpenSearch search backend. OPTIONAL and NOT part of the default deployment:
+# this file is excluded from kustomization.yaml (off by default). To enable,
+# add "- opensearch.yaml" to kustomization.yaml and uncomment OPENSEARCH_URL
+# in configmap.yaml. The app falls back to SQL search (Postgres ILIKE) when
+# OPENSEARCH_URL is unset, so search works without this component.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: security-feed-web-opensearch
+  labels:
+    app: security-feed-web
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch
+  labels:
+    app: security-feed-web
+spec:
+  selector:
+    app: security-feed-web
+    component: opensearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-feed-web-opensearch
+  labels:
+    app: security-feed-web
+    component: opensearch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: security-feed-web
+      component: opensearch
+  template:
+    metadata:
+      labels:
+        app: security-feed-web
+        component: opensearch
+    spec:
+      securityContext:
+        # OpenSearch runs as UID 1000; grant the data volume to that group.
+        fsGroup: 1000
+      initContainers:
+        # OpenSearch requires vm.max_map_count >= 262144. This privileged
+        # init container raises it on the node. If your cluster forbids
+        # privileged containers, set the sysctl node-wide instead and remove
+        # this init container.
+        - name: set-vm-max-map-count
+          image: busybox:1.36
+          securityContext:
+            privileged: true
+          command: ["sysctl", "-w", "vm.max_map_count=262144"]
+      containers:
+        - name: opensearch
+          image: opensearchproject/opensearch:2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9200
+              name: http
+          env:
+            - name: discovery.type
+              value: single-node
+            - name: DISABLE_SECURITY_PLUGIN
+              value: "true"
+            - name: OPENSEARCH_JAVA_OPTS
+              value: "-Xms512m -Xmx512m"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: opensearch-data
+              mountPath: /usr/share/opensearch/data
+      volumes:
+        - name: opensearch-data
+          persistentVolumeClaim:
+            claimName: security-feed-web-opensearch

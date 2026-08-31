@@ -1,7 +1,8 @@
-"""SQLite-backed persistence for the security feed.
+"""Storage facade for the security feed.
 
-Post-MVP this can be swapped for PostgreSQL/OpenSearch, but SQLite keeps the
-current iteration self-contained while still surviving restarts.
+Delegates to the PostgreSQL store when ``DATABASE_URL`` is set and falls back
+to SQLite otherwise, keeping the local path self-contained while still
+surviving restarts.
 """
 
 from __future__ import annotations
