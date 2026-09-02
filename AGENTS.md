@@ -48,7 +48,7 @@ app/ossf.py         OpenSSF Malicious Packages source (GitHub API + cursor)
 app/store.py       Storage facade (delegates to Postgres when DATABASE_URL is set)
 app/postgres_store.py  PostgreSQL storage implementation
 app/events.py      SSE pub/sub broker
-app/alerts.py      Slack / email / log alerts for urgent items
+app/alerts.py      Discord / Slack / email / log alerts for urgent items
 static/index.html  Single-page frontend (HTML + CSS + vanilla JS)
 tests/             Unit tests for feed and store logic
 ```
@@ -80,7 +80,7 @@ tests/             Unit tests for feed and store logic
 5. Update the Sources table in `README.md`.
 6. Enrichment (KEV/EPSS) is optional and best-effort; new enrichment goes in
    `app/enrich.py` and must never fail the whole refresh.
-7. Alerting is opt-in. Discord webhook is the planned first alert option
+7. Alerting is opt-in. Discord webhook is the first/primary alert option
    (`DISCORD_WEBHOOK_URL`); Slack (`SLACK_WEBHOOK_URL`) and SMTP email are
    secondary channels. Without any channel configured, urgent items are logged
    only. Alert delivery must never break the refresh loop.
@@ -109,6 +109,7 @@ Every item must be normalized to the `FeedItem` dataclass in
 - `urgent` — boolean, drives the red dot in the UI
 - `kev` — true when a CVE is in CISA's Known Exploited Vulnerabilities catalog
 - `epss_score` — FIRST EPSS score when available
+- `patch_status` — `fixed` | `affected` | `not-affected` | `deferred` | `unknown`
 - `is_sample` — true for fallback/sample rows
 
 The API returns these via `item_to_dict()`, which also computes `time_ago`.

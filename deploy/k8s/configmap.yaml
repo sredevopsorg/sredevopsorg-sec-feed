@@ -4,7 +4,7 @@ metadata:
   name: security-feed-web-config
 data:
   # Alerting env vars (optional; prefer a Secret for webhook URLs).
-  # Planned first option: Discord webhook.
+  # Discord webhook is the primary channel.
   # DISCORD_WEBHOOK_URL: ""
   # Secondary channels:
   # SLACK_WEBHOOK_URL: ""

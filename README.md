@@ -14,11 +14,12 @@ The UI mirrors the dark "Live Intelligence Feed" design with:
 
 ## Status
 
-Iteration 5. The feed works end-to-end: live sources are fetched, normalized,
-enriched (CISA KEV + EPSS + OSV.dev), deduplicated, prioritized, persisted to
-PostgreSQL (or SQLite locally), searchable (`/api/search`), pushed to the
-browser over SSE, rendered in a single-page frontend, and urgent items trigger
-alerts via Slack/email/log channels.
+Iteration 6. The feed works end-to-end: live sources are fetched, normalized
+(including distro patch status), enriched (CISA KEV + EPSS + OSV.dev),
+deduplicated, prioritized, persisted to PostgreSQL (or SQLite locally),
+searchable (`/api/search`), pushed to the browser over SSE, rendered in a
+single-page frontend, and urgent items trigger alerts via
+Discord/Slack/email/log channels.
 
 ## Stack
 
@@ -31,11 +32,10 @@ alerts via Slack/email/log channels.
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
 | Malware | OpenSSF Malicious Packages (recent OSV reports) |
 | Search | `/api/search` with SQLite fallback or optional OpenSearch |
-| Alerting | Slack webhook / SMTP email / log for urgent items; Discord webhook planned as first option |
+| Alerting | Discord webhook (primary) / Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
-Planned next: Discord webhook alerting as first alert option, deeper distro
-patch-status normalization, and OpenSearch auto-sync improvements.
+Planned next: OpenSearch auto-sync improvements (optional backend).
 
 ## Sources
 
@@ -79,13 +79,14 @@ patch-status normalization, and OpenSearch auto-sync improvements.
 │   ├── store.py          # Storage facade (Postgres or SQLite)
 │   ├── postgres_store.py # PostgreSQL storage implementation
 │   ├── events.py         # SSE pub/sub broker
-│   └── alerts.py         # Slack / email / log alerting
+│   └── alerts.py         # Discord / Slack / email / log alerting
 ├── static/
 │   └── index.html        # Single-page frontend
 ├── tests/
 │   ├── test_feed.py      # Unit tests for feed logic
 │   ├── test_osv.py       # Unit tests for OSV enrichment
 │   ├── test_ossf.py      # Unit tests for OpenSSF source
+│   ├── test_alerts.py    # Unit tests for alert formatting
 │   └── test_store.py     # Unit tests for persistence
 ├── deploy/
 │   └── k8s/              # Kubernetes manifests (Deployment, Service, PVC, ConfigMap)
@@ -137,16 +138,16 @@ The SQLite database is stored in the `feed-data` volume.
 
 ### Alerting environment variables
 
-Current channels (opt-in):
+Channels are opt-in; Discord is the primary channel:
 
 | Variable | Channel |
 |---|---|
+| `DISCORD_WEBHOOK_URL` | Discord incoming webhook (primary) |
 | `SLACK_WEBHOOK_URL` | Slack incoming webhook |
 | `ALERT_EMAIL_TO` + `SMTP_HOST` | SMTP email |
 | none | Log-only fallback |
 
-Planned next: `DISCORD_WEBHOOK_URL` will become the first alert option, with
-Slack and email as secondary channels.
+Without any channel configured, urgent items are logged only.
 
 ### PostgreSQL + OpenSearch via Compose
 
@@ -232,7 +233,8 @@ curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
   "epss_score": 0.97,
   "osv_affected": ["Go:runc"],
   "osv_fixed": ["1.1.12"],
-  "osv_severity": "high"
+  "osv_severity": "high",
+  "patch_status": "fixed"
 }
 ```
 
@@ -247,6 +249,10 @@ curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
 - **EPSS** is fetched from FIRST when CVEs are present (best-effort).
 - **OSV.dev** adds affected packages, fixed versions, and severity for CVEs
   (best-effort, capped per refresh).
+- **Patch status** (`fixed` | `affected` | `not-affected` | `deferred` |
+  `unknown`) is normalized from distro advisories: Ubuntu/Debian notices map
+  to `fixed`, and Red Hat's `package_state`/`affected_release` are reduced to
+  a single canonical status.
 - The feed is sorted by `urgent` first, then `published` descending.
 - Sample/fallback rows are only shown while no live rows are available.
 
@@ -263,10 +269,10 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 - [x] Enrichment: EPSS, CISA KEV, OSV.dev
 - [x] SSE live updates
 - [x] Slack / email / log alerts for `urgent` items
-- [ ] Discord webhook alerting as first alert option
+- [x] Discord webhook alerting as first alert option
 - [x] Docker/Podman compose + Kubernetes manifests
 - [x] OpenSearch search backend (optional) with SQL fallback
 - [x] OpenSSF Malicious Packages source
 - [x] PostgreSQL primary store (SQLite fallback when `DATABASE_URL` unset)
-- [ ] Distro patch-status normalization
+- [x] Distro patch-status normalization
 - [ ] OpenSearch auto-sync improvements

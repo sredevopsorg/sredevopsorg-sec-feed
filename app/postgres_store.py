@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS feed_items (
     osv_affected JSONB NOT NULL DEFAULT '[]',
     osv_fixed JSONB NOT NULL DEFAULT '[]',
     osv_severity TEXT,
+    patch_status TEXT NOT NULL DEFAULT 'unknown',
     first_seen TIMESTAMPTZ NOT NULL,
     last_seen TIMESTAMPTZ NOT NULL
 );
@@ -78,6 +79,10 @@ def _now_iso() -> str:
 def init_db() -> None:
     with _connect() as conn:
         conn.execute(SCHEMA)
+        # Lightweight migration for databases created before patch_status.
+        conn.execute(
+            "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS patch_status TEXT NOT NULL DEFAULT 'unknown'"
+        )
 
 
 def seed_if_empty() -> int:
@@ -113,6 +118,7 @@ def upsert_items(items: list[FeedItem]) -> int:
                 _jsonb(getattr(item, "osv_affected", [])),
                 _jsonb(getattr(item, "osv_fixed", [])),
                 getattr(item, "osv_severity", None),
+                getattr(item, "patch_status", "unknown"),
                 now,
                 now,
             )
@@ -125,10 +131,10 @@ def upsert_items(items: list[FeedItem]) -> int:
                     id, title, summary, url, source, source_url, published,
                     tags, cves, severity, urgent, kev, epss_score,
                     is_sample, osv_affected, osv_fixed, osv_severity,
-                    first_seen, last_seen
+                    patch_status, first_seen, last_seen
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s,
-                        %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
+                        %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
                 ON CONFLICT(id) DO UPDATE SET
                     title = EXCLUDED.title,
                     summary = EXCLUDED.summary,
@@ -146,6 +152,7 @@ def upsert_items(items: list[FeedItem]) -> int:
                     osv_affected = EXCLUDED.osv_affected,
                     osv_fixed = EXCLUDED.osv_fixed,
                     osv_severity = EXCLUDED.osv_severity,
+                    patch_status = EXCLUDED.patch_status,
                     last_seen = EXCLUDED.last_seen
                 """,
                 rows,
@@ -180,6 +187,7 @@ def _row_to_item(row: dict[str, Any], now: datetime | None = None) -> dict[str, 
     item.osv_affected = list(row.get("osv_affected") or [])
     item.osv_fixed = list(row.get("osv_fixed") or [])
     item.osv_severity = row.get("osv_severity")
+    item.patch_status = row.get("patch_status") or "unknown"
     return item_to_dict(item, now=now)
 
 

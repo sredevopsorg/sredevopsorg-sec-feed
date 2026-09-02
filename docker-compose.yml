@@ -6,7 +6,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://feed:feed@postgres:5432/feed
       # Alerting channels (uncomment and set; prefer a secrets file in prod).
-      # Planned first option:
+      # Discord is the primary channel:
       # - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
       # Secondary channels:
       # - SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...

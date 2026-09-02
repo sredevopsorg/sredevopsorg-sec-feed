@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS feed_items (
     osv_affected TEXT NOT NULL DEFAULT '[]',
     osv_fixed TEXT NOT NULL DEFAULT '[]',
     osv_severity TEXT,
+    patch_status TEXT NOT NULL DEFAULT 'unknown',
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL
 );
@@ -93,6 +94,8 @@ def init_db(db_path: str = DB_PATH) -> None:
             conn.execute("ALTER TABLE feed_items ADD COLUMN osv_fixed TEXT NOT NULL DEFAULT '[]'")
         if "osv_severity" not in columns:
             conn.execute("ALTER TABLE feed_items ADD COLUMN osv_severity TEXT")
+        if "patch_status" not in columns:
+            conn.execute("ALTER TABLE feed_items ADD COLUMN patch_status TEXT NOT NULL DEFAULT 'unknown'")
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -133,6 +136,7 @@ def upsert_items(items: list[FeedItem], db_path: str = DB_PATH) -> int:
                 json.dumps(getattr(item, "osv_affected", []) or []),
                 json.dumps(getattr(item, "osv_fixed", []) or []),
                 getattr(item, "osv_severity", None),
+                getattr(item, "patch_status", "unknown"),
                 now,
                 now,
             )
@@ -143,8 +147,8 @@ def upsert_items(items: list[FeedItem], db_path: str = DB_PATH) -> int:
             INSERT INTO feed_items (id, title, summary, url, source, source_url, published,
                                     tags, cves, severity, urgent, kev, epss_score,
                                     is_sample, osv_affected, osv_fixed, osv_severity,
-                                    first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    patch_status, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 summary = excluded.summary,
@@ -162,6 +166,7 @@ def upsert_items(items: list[FeedItem], db_path: str = DB_PATH) -> int:
                 osv_affected = excluded.osv_affected,
                 osv_fixed = excluded.osv_fixed,
                 osv_severity = excluded.osv_severity,
+                patch_status = excluded.patch_status,
                 last_seen = excluded.last_seen
             """,
             rows,
@@ -198,6 +203,7 @@ def row_to_item(row: sqlite3.Row, now: datetime | None = None) -> dict[str, Any]
     item.osv_affected = json.loads(row["osv_affected"] or "[]")
     item.osv_fixed = json.loads(row["osv_fixed"] or "[]")
     item.osv_severity = row["osv_severity"]
+    item.patch_status = row["patch_status"] or "unknown"
     return item_to_dict(item, now=now)
 
 

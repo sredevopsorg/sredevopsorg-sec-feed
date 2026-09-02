@@ -116,6 +116,7 @@ class FeedItem:
     osv_affected: list[str] = field(default_factory=list)
     osv_fixed: list[str] = field(default_factory=list)
     osv_severity: str | None = None
+    patch_status: str = "unknown"
 
 
 @dataclass
@@ -176,6 +177,7 @@ def _sample_items() -> list[FeedItem]:
             "cves": ["CVE-2024-50241", "CVE-2024-50251", "CVE-2024-50262"],
             "severity": "high",
             "urgent": False,
+            "patch_status": "fixed",
         },
         {
             "title": "Kubernetes security advisory: multiple CVEs in kubelet including CVE-2025-25587",
@@ -212,6 +214,7 @@ def _sample_items() -> list[FeedItem]:
             "cves": ["CVE-2025-0395", "CVE-2025-17428"],
             "severity": "high",
             "urgent": False,
+            "patch_status": "fixed",
         },
         {
             "title": "CISA alert: nation-state actors exploiting public-facing Kubernetes clusters",
@@ -342,6 +345,70 @@ def _infer_tags(text: str, source_tags: frozenset[str], cves: list[str]) -> set[
     return tags
 
 
+# ---------------------------------------------------------------------------
+# Distro patch-status normalization
+# ---------------------------------------------------------------------------
+
+PATCH_STATUS_FIXED = "fixed"
+PATCH_STATUS_AFFECTED = "affected"
+PATCH_STATUS_NOT_AFFECTED = "not-affected"
+PATCH_STATUS_DEFERRED = "deferred"
+PATCH_STATUS_UNKNOWN = "unknown"
+
+
+def normalize_patch_status(raw: str | None) -> str:
+    """Map a distro-specific patch/fix status string to a canonical value."""
+    if not raw:
+        return PATCH_STATUS_UNKNOWN
+    key = " ".join(str(raw).strip().lower().split())
+    if key in ("not affected", "not vulnerable", "unaffected"):
+        return PATCH_STATUS_NOT_AFFECTED
+    if any(w in key for w in ("will not fix", "won't fix", "no fix", "fix deferred", "deferred", "out of support", "end of life")):
+        return PATCH_STATUS_DEFERRED
+    if any(w in key for w in ("fixed", "released", "resolved", "patch", "patched", "available", "backport")):
+        return PATCH_STATUS_FIXED
+    if any(w in key for w in ("affected", "vulnerable", "under investigation")):
+        return PATCH_STATUS_AFFECTED
+    return PATCH_STATUS_UNKNOWN
+
+
+def _patch_status_from_text(source: Source, text: str) -> str:
+    """Best-effort patch status derived from advisory text.
+
+    Ubuntu/Debian security notices (USN/DSA) announce released fixes by
+    default, so they start at ``fixed`` and are only downgraded when the text
+    explicitly says otherwise. Other sources stay ``unknown``.
+    """
+    t = text.lower()
+    status = PATCH_STATUS_FIXED if source.id in ("ubuntu", "debian") else PATCH_STATUS_UNKNOWN
+    if any(w in t for w in ("not affected", "not vulnerable", "unaffected", "not-affected")):
+        return PATCH_STATUS_NOT_AFFECTED
+    if any(w in t for w in ("will not fix", "won't fix", "no fix", "fix deferred", "deferred")):
+        return PATCH_STATUS_DEFERRED
+    return status
+
+
+def _redhat_patch_status(row: dict[str, Any]) -> str:
+    """Derive a canonical patch status from Red Hat CVE security-data fields."""
+    if row.get("affected_release"):
+        return PATCH_STATUS_FIXED
+    states = [
+        (p.get("fix_state") or "")
+        for p in (row.get("package_state") or [])
+        if isinstance(p, dict)
+    ]
+    if not states:
+        return PATCH_STATUS_UNKNOWN
+    normalized = [normalize_patch_status(s) for s in states]
+    if PATCH_STATUS_AFFECTED in normalized:
+        return PATCH_STATUS_AFFECTED
+    if PATCH_STATUS_DEFERRED in normalized:
+        return PATCH_STATUS_DEFERRED
+    if all(s == PATCH_STATUS_NOT_AFFECTED for s in normalized):
+        return PATCH_STATUS_NOT_AFFECTED
+    return PATCH_STATUS_UNKNOWN
+
+
 def _tag_priority(tag: str) -> int:
     order = {"exploit": 0, "kubernetes": 1, "cloud": 2, "linux": 3, "cve": 4, "patch": 5, "threat": 6}
     return order.get(tag, 99)
@@ -371,6 +438,7 @@ async def _fetch_rss(source: Source, client: httpx.AsyncClient) -> list[FeedItem
         cvss_score = _extract_cvss_score(raw_summary) if source.id == "cisa" else None
         severity = _infer_severity(text, cvss_score)
         urgent = severity in ("critical", "high") and ("exploit" in tags or "exploit" in text.lower())
+        patch_status = _patch_status_from_text(source, text)
         items.append(
             FeedItem(
                 id=_hash_item(url, title),
@@ -384,6 +452,7 @@ async def _fetch_rss(source: Source, client: httpx.AsyncClient) -> list[FeedItem
                 cves=cves,
                 severity=severity,
                 urgent=urgent,
+                patch_status=patch_status,
             )
         )
     return items
@@ -501,6 +570,7 @@ async def _fetch_redhat(source: Source, client: httpx.AsyncClient) -> list[FeedI
         cves = [cve_id]
         tags = _infer_tags(text, source.tags, cves)
         severity = _infer_severity(text)
+        patch_status = _redhat_patch_status(row)
         published_raw = row.get("public_date")
         try:
             published = datetime.fromisoformat(published_raw.replace("Z", "+00:00")) if published_raw else None
@@ -519,6 +589,7 @@ async def _fetch_redhat(source: Source, client: httpx.AsyncClient) -> list[FeedI
                 cves=cves,
                 severity=severity,
                 urgent=False,
+                patch_status=patch_status,
             )
         )
     return items
@@ -683,6 +754,7 @@ def item_to_dict(item: FeedItem, now: datetime | None = None) -> dict[str, Any]:
         "osv_affected": getattr(item, "osv_affected", []),
         "osv_fixed": getattr(item, "osv_fixed", []),
         "osv_severity": getattr(item, "osv_severity", None),
+        "patch_status": getattr(item, "patch_status", "unknown"),
     }
 
 

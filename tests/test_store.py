@@ -5,7 +5,7 @@ from app.fetcher import FeedItem
 from app.store import init_db, mark_alerted, query_feed, search_feed, seed_if_empty, stats, unalerted_urgent_items, upsert_items
 
 
-def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = frozenset({"linux"}), cves: list[str] | None = None, severity: str = "high", urgent: bool = False) -> FeedItem:
+def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = frozenset({"linux"}), cves: list[str] | None = None, severity: str = "high", urgent: bool = False, patch_status: str = "unknown") -> FeedItem:
     return FeedItem(
         id=id,
         title=title,
@@ -18,6 +18,7 @@ def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = froz
         cves=cves or ["CVE-2024-0001"],
         severity=severity,
         urgent=urgent,
+        patch_status=patch_status,
     )
 
 
@@ -63,3 +64,13 @@ def test_stats(tmp_path):
     assert s["total"] > 0
     assert "by_tag" in s
     assert "by_severity" in s
+
+
+def test_patch_status_roundtrip(tmp_path):
+    db = str(tmp_path / "feed.db")
+    init_db(db)
+    seed_if_empty(db)
+    upsert_items([make_item("p", "Patched advisory", {"linux"}, ["CVE-2024-0003"], "high", False, "fixed")], db)
+    rows = query_feed(limit=50, db_path=db)
+    row = next(r for r in rows if r["id"] == "p")
+    assert row["patch_status"] == "fixed"

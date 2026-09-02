@@ -6,9 +6,12 @@ from app.fetcher import (
     _extract_cves,
     _infer_severity,
     _infer_tags,
+    _patch_status_from_text,
+    _redhat_patch_status,
     _sample_items,
     _time_ago,
     FeedItem,
+    normalize_patch_status,
 )
 
 
@@ -65,3 +68,47 @@ def test_time_ago():
     assert _time_ago(120) == "2 minutes"
     assert _time_ago(3600) == "1 hour"
     assert _time_ago(7200) == "2 hours"
+
+
+def test_normalize_patch_status():
+    assert normalize_patch_status("Fixed") == "fixed"
+    assert normalize_patch_status("Affected") == "affected"
+    assert normalize_patch_status("Not affected") == "not-affected"
+    assert normalize_patch_status("Will not fix") == "deferred"
+    assert normalize_patch_status("Fix deferred") == "deferred"
+    assert normalize_patch_status("Out of support scope") == "deferred"
+    assert normalize_patch_status(None) == "unknown"
+    assert normalize_patch_status("") == "unknown"
+    assert normalize_patch_status("something else") == "unknown"
+
+
+def test_redhat_patch_status():
+    fixed = {"affected_release": [{"package": "kernel"}]}
+    assert _redhat_patch_status(fixed) == "fixed"
+
+    affected = {"package_state": [{"fix_state": "Affected"}, {"fix_state": "Not affected"}]}
+    assert _redhat_patch_status(affected) == "affected"
+
+    deferred = {"package_state": [{"fix_state": "Will not fix"}]}
+    assert _redhat_patch_status(deferred) == "deferred"
+
+    not_affected = {"package_state": [{"fix_state": "Not affected"}, {"fix_state": "Not affected"}]}
+    assert _redhat_patch_status(not_affected) == "not-affected"
+
+    assert _redhat_patch_status({}) == "unknown"
+
+
+def test_patch_status_from_text():
+    from app.sources import Source
+
+    ubuntu = Source(id="ubuntu", name="Ubuntu", kind="rss", url="u", tags=frozenset())
+    debian = Source(id="debian", name="Debian", kind="rss", url="u", tags=frozenset())
+    k8s = Source(id="k8s", name="K8s", kind="rss", url="u", tags=frozenset())
+
+    # Distro notices default to "fixed" (advisory = released fixes).
+    assert _patch_status_from_text(ubuntu, "USN-7234-1: Linux kernel vulnerabilities") == "fixed"
+    assert _patch_status_from_text(debian, "DSA-5812-1 openssl security update") == "fixed"
+    # Explicit "not affected" downgrades.
+    assert _patch_status_from_text(ubuntu, "CVE-2024-0001 ... Ubuntu is not affected") == "not-affected"
+    # Non-distro sources stay unknown.
+    assert _patch_status_from_text(k8s, "Kubernetes security advisory") == "unknown"

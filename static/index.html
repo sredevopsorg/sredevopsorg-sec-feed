@@ -243,6 +243,10 @@
     .chip-severity-high { background: rgba(255, 149, 0, 0.10); color: #ffb74d; border-color: rgba(255, 149, 0, 0.3); }
     .chip-severity-medium { background: rgba(255, 213, 79, 0.10); color: #ffd54f; border-color: rgba(255, 213, 79, 0.25); }
     .chip-severity-low, .chip-severity-unknown { background: rgba(139, 152, 165, 0.10); color: #8b98a5; border-color: rgba(139, 152, 165, 0.25); }
+    .chip-patch-status-fixed { background: rgba(94, 220, 146, 0.12); color: #7ce8ae; border-color: rgba(94, 220, 146, 0.35); }
+    .chip-patch-status-affected { background: rgba(255, 149, 0, 0.12); color: #ffb74d; border-color: rgba(255, 149, 0, 0.35); }
+    .chip-patch-status-not-affected { background: rgba(139, 152, 165, 0.10); color: #8b98a5; border-color: rgba(139, 152, 165, 0.25); }
+    .chip-patch-status-deferred { background: rgba(186, 104, 200, 0.10); color: #ce93d8; border-color: rgba(186, 104, 200, 0.26); }
 
     .row-dot {
       width: 10px;
@@ -362,6 +366,9 @@
       const chips = [];
       if (item.severity && item.severity !== "unknown") {
         chips.push(`<span class="chip chip-severity-${escapeHtml(item.severity)}">${escapeHtml(item.severity)}</span>`);
+      }
+      if (item.patch_status && item.patch_status !== "unknown") {
+        chips.push(`<span class="chip chip-patch-status-${escapeHtml(item.patch_status)}">${escapeHtml(item.patch_status)}</span>`);
       }
       for (const tag of item.tags || []) {
         chips.push(`<span class="${chipClass(tag)}">${escapeHtml(tag)}</span>`);

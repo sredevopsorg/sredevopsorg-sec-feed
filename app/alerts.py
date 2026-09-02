@@ -2,9 +2,10 @@
 
 Channels are opt-in via environment variables:
 
+- DISCORD_WEBHOOK_URL — send urgent items to Discord (primary channel)
 - SLACK_WEBHOOK_URL — send urgent items to Slack
 - ALERT_EMAIL_TO, SMTP_HOST — send urgent items via email (SMTP)
-- If neither is configured, urgent items are logged only.
+- If none are configured, urgent items are logged only.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from . import store
 
 logger = logging.getLogger(__name__)
 
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 ALERT_EMAIL_TO = os.environ.get("ALERT_EMAIL_TO")
 SMTP_HOST = os.environ.get("SMTP_HOST")
@@ -52,6 +54,44 @@ async def _send_slack(webhook_url: str, text: str) -> None:
         resp.raise_for_status()
 
 
+_SEVERITY_COLORS = {
+    "critical": 0xE53935,
+    "high": 0xFB8C00,
+    "medium": 0xFDD835,
+    "low": 0x1E88E5,
+    "unknown": 0x9E9E9E,
+}
+
+
+def _discord_payload(item: dict) -> dict:
+    """Build the JSON payload for a Discord webhook (one embed per item)."""
+    severity = (item.get("severity") or "unknown").lower()
+    cves = ", ".join(item.get("cves") or []) or "—"
+    title = f"[{severity.upper()}] {item.get('title') or ''}"[:256]
+    return {
+        "username": "Security Feed",
+        "embeds": [
+            {
+                "title": title,
+                "description": (item.get("summary") or "")[:1800] or "—",
+                "url": item.get("url"),
+                "color": _SEVERITY_COLORS.get(severity, 0x9E9E9E),
+                "fields": [
+                    {"name": "Source", "value": f"{item.get('source')} · {item.get('time_ago')}", "inline": True},
+                    {"name": "CVEs", "value": cves[:1024], "inline": True},
+                ],
+                "footer": {"text": "Security Intelligence Live Feed"},
+            }
+        ],
+    }
+
+
+async def _send_discord(webhook_url: str, item: dict) -> None:
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        resp = await client.post(webhook_url, json=_discord_payload(item))
+        resp.raise_for_status()
+
+
 def _send_email(to: str, subject: str, body: str) -> None:
     msg = EmailMessage()
     msg["From"] = ALERT_FROM
@@ -78,11 +118,13 @@ async def send_urgent_alerts() -> list[str]:
         subject = f"[security-feed] {item.get('severity', 'unknown').upper()} - {item.get('title', '')[:80]}"
         body = _format_item(item)
         try:
+            if DISCORD_WEBHOOK_URL:
+                await _send_discord(DISCORD_WEBHOOK_URL, item)
             if SLACK_WEBHOOK_URL:
                 await _send_slack(SLACK_WEBHOOK_URL, body)
             if ALERT_EMAIL_TO and SMTP_HOST:
                 await asyncio.to_thread(_send_email, ALERT_EMAIL_TO, subject, body)
-            if not SLACK_WEBHOOK_URL and not (ALERT_EMAIL_TO and SMTP_HOST):
+            if not DISCORD_WEBHOOK_URL and not SLACK_WEBHOOK_URL and not (ALERT_EMAIL_TO and SMTP_HOST):
                 logger.warning("URGENT ALERT: %s", subject)
             alerted.append(item["id"])
         except Exception:
