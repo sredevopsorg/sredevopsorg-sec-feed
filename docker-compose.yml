@@ -4,7 +4,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://feed:feed@postgres:5432/feed
+      - SECURITY_FEED_DB=/app/data/feed.db
+      # - DATABASE_URL=postgresql://feed:feed@postgres:5432/feed
       # Alerting channels (uncomment and set; prefer a secrets file in prod).
       # Discord is the primary channel:
       # - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
@@ -25,7 +26,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    image: docker.io/postgres:16-alpine
     environment:
       - POSTGRES_USER=feed
       - POSTGRES_PASSWORD=feed
@@ -42,7 +43,7 @@ services:
   # One-shot helper: ensure the application database exists before the feed
   # app starts (the postgres image only creates POSTGRES_DB on first init).
   postgres-init:
-    image: postgres:16-alpine
+    image: docker.io/postgres:16-alpine
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,7 +57,7 @@ services:
     restart: "no"
 
   opensearch:
-    image: opensearchproject/opensearch:2
+    image: docker.io/opensearchproject/opensearch:2
     profiles: ["search"]
     environment:
       - discovery.type=single-node
