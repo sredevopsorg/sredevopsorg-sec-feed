@@ -61,12 +61,12 @@ spec:
                 name: security-feed-web-secrets
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "feed", "-d", "feed"]
+              command: ["pg_isready", "-U", "feed", "-d", "postgres"]
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "feed", "-d", "feed"]
+              command: ["pg_isready", "-U", "feed", "-d", "postgres"]
             initialDelaySeconds: 15
             periodSeconds: 20
           resources:

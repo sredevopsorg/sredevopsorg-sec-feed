@@ -17,18 +17,29 @@ spec:
         component: feed
     spec:
       initContainers:
-        # The app opens a Postgres connection during startup, so wait until
-        # the database is accepting connections.
+        # Wait for PostgreSQL and ensure the application database exists.
+        # The postgres image only creates POSTGRES_DB on first init, so check
+        # the always-present `postgres` maintenance DB and create `feed` if it
+        # is missing (e.g. a reused/stale volume).
         - name: wait-for-postgres
           image: postgres:16-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: security-feed-web-secrets
+                  key: POSTGRES_PASSWORD
           command:
             - sh
             - -c
             - |
-              until pg_isready -h postgres -p 5432 -U feed -d feed; do
+              until pg_isready -h postgres -p 5432 -U feed -d postgres; do
                 echo "waiting for postgres..."
                 sleep 2
               done
+              psql -h postgres -p 5432 -U feed -d postgres -tAc \
+                "SELECT 1 FROM pg_database WHERE datname = 'feed'" | grep -q 1 || \
+              psql -h postgres -p 5432 -U feed -d postgres -c "CREATE DATABASE feed"
       containers:
         - name: feed
           image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
