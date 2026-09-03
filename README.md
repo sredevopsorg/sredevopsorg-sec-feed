@@ -12,6 +12,8 @@ The UI mirrors the dark "Live Intelligence Feed" design with:
 - tag filters
 - a `VIEW FULL LIVE FEED →` footer
 
+![Security Intelligence Live Feed UI preview](screenshot.png)
+
 ## Status
 
 Iteration 6. The feed works end-to-end: live sources are fetched, normalized
@@ -31,7 +33,7 @@ Discord/Slack/email/log channels.
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
 | Malware | OpenSSF Malicious Packages (recent OSV reports) |
-| Search | `/api/search` with SQLite fallback or optional OpenSearch |
+| Search | `/api/search` with SQL fallback (Postgres/SQLite) or optional OpenSearch |
 | Alerting | Discord webhook (primary) / Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
@@ -169,25 +171,43 @@ on startup and keeps it in sync with the archive automatically (incremental
 indexing per refresh plus a throttled full reconcile) — all best-effort, so an
 unavailable OpenSearch never breaks the feed.
 
-### Kubernetes
+### Kubernetes quickstart
+
+Requires `kubectl` and access to a cluster (Kustomize is built into `kubectl`).
 
 ```bash
+# Deploy the app, PostgreSQL (primary store), ConfigMap, Secret, and PVCs
 kubectl apply -k deploy/k8s
+
+# Watch the pods become ready
+kubectl get pods -l app=security-feed-web -w
 ```
 
-The manifests deploy the feed app plus its PostgreSQL dependency:
+Access the app with a port-forward:
 
-- **PostgreSQL** primary store (Deployment + `ReadWriteOnce` PVC + `postgres`
-  ClusterIP service). Credentials and the `DATABASE_URL` connection string
-  live in the `security-feed-web-secrets` Secret.
-- The feed app itself (ClusterIP service on port 80), with a `ReadWriteOnce`
-  PVC retained as the SQLite fallback when `DATABASE_URL` is unset.
+```bash
+kubectl port-forward svc/security-feed-web 8000:80
+```
 
-**OpenSearch is optional and off by default.** `opensearch.yaml` is included
-in the tree but not applied unless you uncomment it in `kustomization.yaml`
-and uncomment `OPENSEARCH_URL` in `configmap.yaml`. Without it, `/api/search`
-falls back to SQL (Postgres `ILIKE`), so search works without any extra
-infrastructure.
+Then open <http://localhost:8000>.
+
+**What gets deployed** by `kubectl apply -k deploy/k8s`:
+
+- `security-feed-web` — the feed app (Deployment + ClusterIP Service on port
+  80). An init container waits for PostgreSQL before startup, and the app
+  reads `DATABASE_URL` from the `security-feed-web-secrets` Secret.
+- `postgres` — PostgreSQL primary store (Deployment + `ReadWriteOnce` PVC +
+  ClusterIP Service). Credentials live in `security-feed-web-secrets`.
+- `security-feed-web-data` — `ReadWriteOnce` PVC kept as the SQLite fallback
+  when `DATABASE_URL` is unset.
+- `security-feed-web-config` — ConfigMap for `LOG_LEVEL` and optional alerting
+  env vars. Put real Discord/Slack/email webhook values in a Secret in
+  production rather than the ConfigMap.
+
+**OpenSearch is optional and off by default.** To enable it, uncomment
+`opensearch.yaml` in `deploy/k8s/kustomization.yaml` and `OPENSEARCH_URL` in
+`deploy/k8s/configmap.yaml`. Without it, `/api/search` falls back to SQL
+(Postgres `ILIKE`), so search works without any extra infrastructure.
 
 ## API
 
