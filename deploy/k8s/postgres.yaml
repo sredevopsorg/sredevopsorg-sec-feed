@@ -8,7 +8,8 @@ metadata:
     app: security-feed-web
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
+  storageClassName: "longhorn-rwx"
   resources:
     requests:
       storage: 1Gi
@@ -78,6 +79,7 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+              subPath: sadfasdf
       volumes:
         - name: postgres-data
           persistentVolumeClaim:
