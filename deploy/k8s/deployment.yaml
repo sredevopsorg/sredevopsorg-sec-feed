@@ -9,24 +9,26 @@ spec:
   selector:
     matchLabels:
       app: security-feed-web
+      component: feed
   template:
     metadata:
       labels:
         app: security-feed-web
+        component: feed
     spec:
-      # initContainers:
-      #   # The app opens a Postgres connection during startup, so wait until
-      #   # the database is accepting connections.
-      #   - name: wait-for-postgres
-      #     image: postgres:16-alpine
-      #     command:
-      #       - sh
-      #       - -c
-      #       - |
-      #         until pg_isready -h postgres -p 5432 -U feed -d feed; do
-      #           echo "waiting for postgres..."
-      #           sleep 2
-      #         done
+      initContainers:
+        # The app opens a Postgres connection during startup, so wait until
+        # the database is accepting connections.
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -p 5432 -U feed -d feed; do
+                echo "waiting for postgres..."
+                sleep 2
+              done
       containers:
         - name: feed
           image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
@@ -45,18 +47,18 @@ spec:
                 secretKeyRef:
                   name: security-feed-web-secrets
                   key: DATABASE_URL
-          # readinessProbe:
-          #   httpGet:
-          #     path: /health
-          #     port: http
-          #   initialDelaySeconds: 5
-          #   periodSeconds: 10
-          # livenessProbe:
-          #   httpGet:
-          #     path: /health
-          #     port: http
-          #   initialDelaySeconds: 15
-          #   periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
           resources:
             requests:
               cpu: 50m
@@ -67,7 +69,6 @@ spec:
           volumeMounts:
             - name: feed-data
               mountPath: /app/data
-              subPath: asdfsdf
       volumes:
         - name: feed-data
           persistentVolumeClaim:
