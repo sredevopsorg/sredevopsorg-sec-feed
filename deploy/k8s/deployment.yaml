@@ -29,8 +29,8 @@ spec:
               done
       containers:
         - name: feed
-          image: ghcr.io/sredevopsorgagents/security-feed-web:latest
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
               name: http
