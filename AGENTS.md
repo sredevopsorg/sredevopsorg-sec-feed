@@ -43,7 +43,7 @@ app/sources.py     Source definitions (add new feeds here)
 app/fetcher.py     Fetching, parsing, normalization, caching
 app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)
 app/osv.py         OSV.dev enrichment (affected/fixed/severity, best-effort)
-app/search.py      Search backend (OpenSearch if configured, SQLite fallback)
+app/search.py      Search backend (OpenSearch if configured, SQL fallback)
 app/ossf.py         OpenSSF Malicious Packages source (GitHub API + cursor)
 app/store.py       Storage facade (delegates to Postgres when DATABASE_URL is set)
 app/postgres_store.py  PostgreSQL storage implementation
@@ -85,7 +85,8 @@ tests/             Unit tests for feed and store logic
    secondary channels. Without any channel configured, urgent items are logged
    only. Alert delivery must never break the refresh loop.
 8. Search must work without extra infrastructure. `/api/search` falls back to
-   SQLite when `OPENSEARCH_URL` is not configured.
+   SQL (Postgres `ILIKE` or SQLite `LIKE`) when `OPENSEARCH_URL` is not
+   configured.
 9. OSV enrichment is best-effort and capped per refresh. Never fetch OSV for
    every CVE in the archive.
 10. The OSSF malicious-packages source must use the GitHub API cursor flow in

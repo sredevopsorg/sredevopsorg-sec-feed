@@ -691,11 +691,15 @@ async def refresh_feed() -> list[FeedItem]:
         except Exception:
             logger.exception("Failed to persist feed items")
 
-        # Best-effort search indexing (OpenSearch if configured).
+        # Best-effort search indexing (OpenSearch if configured). Ensure the
+        # index exists, index this refresh's items, and reconcile the full
+        # archive on a throttled schedule to catch drift.
         try:
             from . import search
 
+            await search.ensure_index()
             await search.index_items(items)
+            await search.maybe_sync_archive()
         except Exception:
             logger.exception("Search indexing failed")
 

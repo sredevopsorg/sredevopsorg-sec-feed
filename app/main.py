@@ -31,12 +31,19 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(store.init_db)
     await asyncio.to_thread(store.seed_if_empty)
 
+    # Backfill OpenSearch from the archive if configured (best-effort).
+    try:
+        await search_backend.ensure_index()
+        await search_backend.sync_archive()
+    except Exception:
+        logger.exception("OpenSearch startup sync failed")
+
     # Warm/refresh the live cache in the background.
     asyncio.create_task(fetcher.refresh_feed())
     yield
 
 
-app = FastAPI(title="Security Intelligence Live Feed", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Security Intelligence Live Feed", version="0.2.0-rc.1", lifespan=lifespan)
 
 
 @app.get("/health")

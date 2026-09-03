@@ -35,7 +35,7 @@ Discord/Slack/email/log channels.
 | Alerting | Discord webhook (primary) / Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
-Planned next: OpenSearch auto-sync improvements (optional backend).
+All roadmap items are complete for this release candidate (0.2.0-rc.1).
 
 ## Sources
 
@@ -164,6 +164,11 @@ Then uncomment `OPENSEARCH_URL=http://opensearch:9200` in the `feed` service
 environment. Without OpenSearch, `/api/search` falls back to SQL (Postgres
 `ILIKE` or SQLite `LIKE`).
 
+When OpenSearch is enabled, the app creates the index with an explicit mapping
+on startup and keeps it in sync with the archive automatically (incremental
+indexing per refresh plus a throttled full reconcile) — all best-effort, so an
+unavailable OpenSearch never breaks the feed.
+
 ### Kubernetes
 
 ```bash
@@ -275,4 +280,4 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 - [x] OpenSSF Malicious Packages source
 - [x] PostgreSQL primary store (SQLite fallback when `DATABASE_URL` unset)
 - [x] Distro patch-status normalization
-- [ ] OpenSearch auto-sync improvements
+- [x] OpenSearch auto-sync improvements
