@@ -49,14 +49,16 @@ app/store.py       Storage facade (delegates to Postgres when DATABASE_URL is se
 app/postgres_store.py  PostgreSQL storage implementation
 app/events.py      SSE pub/sub broker
 app/alerts.py      Discord / Slack / email / log alerts for urgent items
-static/index.html  Single-page frontend (HTML + CSS + vanilla JS)
+frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step)
 tests/             Unit tests for feed and store logic
 ```
 
 ## Critical invariants
 
-1. **The frontend must stay dependency-free.** It is a single `static/index.html`
-   file with inline CSS/JS. Do not introduce npm, bundlers, or CDN scripts.
+1. **The frontend must stay dependency-free.** It is a static app in
+   `frontend/` (`index.html`, `styles.css`, `app.js`, `config.js`) with no
+   build step. Do not introduce npm, bundlers, or CDN scripts. Resolve API
+   calls through the configured base URL rather than hardcoding `/api/...`.
 2. **The feed must never render empty.** `fetcher.py` provides sample fallback
    data when all live sources fail. Preserve that behavior.
 3. **Never block the API on a slow source.** `get_feed()` returns the cached
