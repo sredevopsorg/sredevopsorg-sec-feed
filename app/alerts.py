@@ -13,24 +13,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import smtplib
 from email.message import EmailMessage
 
 import httpx
 
 from . import store
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
-ALERT_EMAIL_TO = os.environ.get("ALERT_EMAIL_TO")
-SMTP_HOST = os.environ.get("SMTP_HOST")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-ALERT_FROM = os.environ.get("ALERT_FROM", "security-feed@example.com")
+DISCORD_WEBHOOK_URL = settings.discord_webhook_url
+SLACK_WEBHOOK_URL = settings.slack_webhook_url
+ALERT_EMAIL_TO = settings.alert_email_to
+SMTP_HOST = settings.smtp_host
+SMTP_PORT = settings.smtp_port
+SMTP_USER = settings.smtp_user
+SMTP_PASSWORD = settings.smtp_password
+ALERT_FROM = settings.alert_from
 
 MAX_ALERTS_PER_RUN = 10
 
