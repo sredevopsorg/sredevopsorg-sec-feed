@@ -42,7 +42,8 @@ app/config.py      Centralized Settings (environment-driven; ADR-0002)
 app/models.py      Domain model (FeedItem) + serialization (ADR-0004)
 app/main.py        FastAPI API routes and app startup (pure JSON API)
 app/sources.py     Source definitions (add new feeds here)
-app/fetcher.py     Fetching, parsing, normalization, caching
+app/fetcher.py     Fetching + normalization of upstream sources
+app/pipeline.py    Refresh orchestration: fetch → enrich → persist → index → publish → alert
 app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)
 app/osv.py         OSV.dev enrichment (affected/fixed/severity, best-effort)
 app/search.py      Search backend (OpenSearch if configured, SQL fallback)

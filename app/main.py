@@ -11,7 +11,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from . import fetcher
+from . import pipeline
 from . import search as search_backend
 from . import store
 from .config import settings
@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
         logger.exception("OpenSearch startup sync failed")
 
     # Warm/refresh the live cache in the background.
-    asyncio.create_task(fetcher.refresh_feed())
+    asyncio.create_task(pipeline.refresh_feed())
     yield
 
 
@@ -63,7 +63,7 @@ async def health() -> dict:
         stats = {}
     return {
         "status": "ok",
-        "cache_fetched_at": fetcher.CACHE.fetched_at.isoformat() if fetcher.CACHE.fetched_at else None,
+        "cache_fetched_at": pipeline.CACHE.fetched_at.isoformat() if pipeline.CACHE.fetched_at else None,
         "db_total": stats.get("total"),
     }
 
@@ -75,10 +75,10 @@ async def api_feed(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict:
     # Make sure a refresh is scheduled if the cache is empty or stale.
-    await fetcher.get_feed()
+    await pipeline.get_feed()
 
     items = await asyncio.to_thread(store.query_feed, tag, severity, limit)
-    cache = fetcher.CACHE
+    cache = pipeline.CACHE
     return {
         "generated_at": cache.generated_at.isoformat() if cache.generated_at else None,
         "fetched_at": cache.fetched_at.isoformat() if cache.fetched_at else None,
