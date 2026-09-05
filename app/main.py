@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import fetcher
@@ -21,7 +21,7 @@ from .sources import SOURCES
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
 @asynccontextmanager
@@ -141,11 +141,7 @@ async def api_sources() -> dict:
     }
 
 
-@app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
-
-
-# Mount static assets (the SPA is a single file today; this keeps room for
-# future CSS/JS/images).
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# Serve the frontend as a static site. This mount is registered last so the
+# /api/* and /health routes above take precedence. It is kept here only for
+# single-container convenience; the API itself does not depend on it.
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

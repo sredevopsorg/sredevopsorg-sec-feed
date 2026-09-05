@@ -28,7 +28,7 @@ Discord/Slack/email/log channels.
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.13, FastAPI, httpx, feedparser |
-| Frontend | Single-file HTML/CSS/JS (no build step, no CDN) |
+| Frontend | Static HTML/CSS/JS in `frontend/` (no build step, no CDN) |
 | Storage | PostgreSQL primary store, SQLite fallback, in-memory cache |
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
@@ -82,8 +82,11 @@ All roadmap items are complete for this release candidate (0.2.0-rc.1).
 │   ├── postgres_store.py # PostgreSQL storage implementation
 │   ├── events.py         # SSE pub/sub broker
 │   └── alerts.py         # Discord / Slack / email / log alerting
-├── static/
-│   └── index.html        # Single-page frontend
+├── frontend/
+│   ├── index.html        # Single-page frontend (markup)
+│   ├── styles.css        # Styles
+│   ├── app.js            # Frontend logic (consumes the JSON API)
+│   └── config.js         # Runtime config (API base URL)
 ├── tests/
 │   ├── test_feed.py      # Unit tests for feed logic
 │   ├── test_osv.py       # Unit tests for OSV enrichment
@@ -117,6 +120,16 @@ Open <http://localhost:8000>.
 > are served from the configured store and refresh every 10 minutes; the
 > browser updates via SSE (`/api/events`) and falls back to polling every 5
 > minutes.
+
+### Frontend configuration
+
+The frontend is a dependency-free static app in `frontend/`. It reads the API
+origin from `window.__API_BASE_URL__` (set in `frontend/config.js`):
+
+- Leave it empty (`""`) to call the API on the same origin (the default when
+  served behind a reverse proxy).
+- Set it to an absolute URL (e.g. `"https://feed.example.com"`) to host the
+  frontend separately from the API.
 
 ### Local PostgreSQL
 
