@@ -8,18 +8,19 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
 
-from .fetcher import FeedItem, _ensure_aware, _sample_items, item_to_dict
+from .config import settings
+from .models import FeedItem, _ensure_aware, _sample_items, item_to_dict
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://feed:feed@localhost:5432/feed")
+# Selected by ``app.store`` only when configured; never defaults to a host.
+DATABASE_URL = settings.database_url or ""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS feed_items (
@@ -76,7 +77,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def init_db() -> None:
+def init_db(db_path: str = "") -> None:
     with _connect() as conn:
         conn.execute(SCHEMA)
         # Lightweight migration for databases created before patch_status.
@@ -85,7 +86,7 @@ def init_db() -> None:
         )
 
 
-def seed_if_empty() -> int:
+def seed_if_empty(db_path: str = "") -> int:
     with _connect() as conn:
         count = conn.execute("SELECT COUNT(*) FROM feed_items").fetchone()["count"]
     if count > 0:
@@ -93,7 +94,7 @@ def seed_if_empty() -> int:
     return upsert_items(_sample_items())
 
 
-def upsert_items(items: list[FeedItem]) -> int:
+def upsert_items(items: list[FeedItem], db_path: str = "") -> int:
     if not items:
         return 0
     now = _now_iso()
@@ -195,7 +196,7 @@ def _live_count(conn: psycopg.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM feed_items WHERE is_sample = FALSE").fetchone()["count"]
 
 
-def query_feed(tag: str | None = None, severity: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+def query_feed(tag: str | None = None, severity: str | None = None, limit: int = 50, db_path: str = "") -> list[dict[str, Any]]:
     clauses: list[str] = []
     params: list[Any] = []
     with _connect() as conn:
@@ -216,7 +217,7 @@ def query_feed(tag: str | None = None, severity: str | None = None, limit: int =
     return [_row_to_item(row) for row in rows]
 
 
-def search_feed(q: str, tag: str | None = None, severity: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+def search_feed(q: str, tag: str | None = None, severity: str | None = None, limit: int = 50, db_path: str = "") -> list[dict[str, Any]]:
     if not q:
         return query_feed(tag=tag, severity=severity, limit=limit)
     clauses: list[str] = []
@@ -240,7 +241,7 @@ def search_feed(q: str, tag: str | None = None, severity: str | None = None, lim
     return [_row_to_item(row) for row in rows]
 
 
-def stats() -> dict[str, Any]:
+def stats(db_path: str = "") -> dict[str, Any]:
     with _connect() as conn:
         total = conn.execute("SELECT COUNT(*) FROM feed_items").fetchone()["count"]
         live = conn.execute("SELECT COUNT(*) FROM feed_items WHERE is_sample = FALSE").fetchone()["count"]
@@ -266,7 +267,7 @@ def stats() -> dict[str, Any]:
     }
 
 
-def unalerted_urgent_items(limit: int = 20) -> list[dict[str, Any]]:
+def unalerted_urgent_items(limit: int = 20, db_path: str = "") -> list[dict[str, Any]]:
     with _connect() as conn:
         if _live_count(conn) > 0:
             rows = conn.execute(
@@ -293,7 +294,7 @@ def unalerted_urgent_items(limit: int = 20) -> list[dict[str, Any]]:
     return [_row_to_item(row) for row in rows]
 
 
-def mark_alerted(item_ids: list[str]) -> None:
+def mark_alerted(item_ids: list[str], db_path: str = "") -> None:
     if not item_ids:
         return
     now = _now_iso()
@@ -304,13 +305,13 @@ def mark_alerted(item_ids: list[str]) -> None:
         )
 
 
-def get_source_cursor(source_id: str) -> str | None:
+def get_source_cursor(source_id: str, db_path: str = "") -> str | None:
     with _connect() as conn:
         row = conn.execute("SELECT cursor FROM source_cursors WHERE source_id = %s", (source_id,)).fetchone()
     return row["cursor"] if row else None
 
 
-def set_source_cursor(source_id: str, cursor: str) -> None:
+def set_source_cursor(source_id: str, cursor: str, db_path: str = "") -> None:
     with _connect() as conn:
         conn.execute(
             "INSERT INTO source_cursors (source_id, cursor, updated_at) VALUES (%s, %s, %s) "

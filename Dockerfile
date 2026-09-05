@@ -6,9 +6,8 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code and frontend assets.
+# Copy application code.
 COPY app ./app
-COPY frontend ./frontend
 
 # Persistent SQLite database location.
 ENV SECURITY_FEED_DB=/app/data/feed.db

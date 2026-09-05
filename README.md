@@ -28,7 +28,7 @@ Discord/Slack/email/log channels.
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.13, FastAPI, httpx, feedparser |
-| Frontend | Static HTML/CSS/JS in `frontend/` (no build step, no CDN) |
+| Frontend | Static HTML/CSS/JS in `frontend/`, served by nginx (no build step, no CDN) |
 | Storage | PostgreSQL primary store, SQLite fallback, in-memory cache |
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
@@ -38,6 +38,12 @@ Discord/Slack/email/log channels.
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
 All roadmap items are complete for this release candidate (0.2.0-rc.1).
+
+The frontend and backend are separate deployables: the backend is a pure JSON
+API (`/api/*`, `/health`) and the frontend is a static app served by nginx that
+reverse-proxies `/api` to the backend. They can also be hosted on different
+origins via `window.__API_BASE_URL__` (see `frontend/config.js`) plus the
+backend's `CORS_ORIGINS` setting.
 
 ## Sources
 
@@ -71,22 +77,27 @@ All roadmap items are complete for this release candidate (0.2.0-rc.1).
 .
 ├── app/
 │   ├── __init__.py       # Package marker
-│   ├── main.py           # FastAPI application and API routes
+│   ├── config.py         # Centralized Settings (ADR-0002)
+│   ├── models.py         # Domain model (FeedItem) + serialization (ADR-0004)
+│   ├── main.py           # FastAPI API routes (pure JSON API)
 │   ├── sources.py        # Source definitions
 │   ├── fetcher.py        # Fetching, normalization, caching
 │   ├── enrich.py         # CISA KEV + EPSS enrichment
 │   ├── osv.py            # OSV.dev enrichment (affected/fixed/severity)
 │   ├── search.py         # Search backend (OpenSearch + SQLite fallback)
 │   ├── ossf.py           # OpenSSF Malicious Packages GitHub-API source
-│   ├── store.py          # Storage facade (Postgres or SQLite)
-│   ├── postgres_store.py # PostgreSQL storage implementation
+│   ├── store.py          # Storage facade/port (selects backend; ADR-0003)
+│   ├── sqlite_store.py   # SQLite storage adapter
+│   ├── postgres_store.py # PostgreSQL storage adapter
 │   ├── events.py         # SSE pub/sub broker
 │   └── alerts.py         # Discord / Slack / email / log alerting
 ├── frontend/
 │   ├── index.html        # Single-page frontend (markup)
 │   ├── styles.css        # Styles
 │   ├── app.js            # Frontend logic (consumes the JSON API)
-│   └── config.js         # Runtime config (API base URL)
+│   ├── config.js         # Runtime config (API base URL)
+│   ├── nginx.conf        # nginx config (serves the SPA, proxies /api)
+│   └── Dockerfile        # Frontend (nginx) image
 ├── tests/
 │   ├── test_feed.py      # Unit tests for feed logic
 │   ├── test_osv.py       # Unit tests for OSV enrichment
@@ -110,11 +121,14 @@ cd /home/ngeorger/feeder
 # Install dependencies into ./.pip-packages
 python3 -m pip install --target ./.pip-packages -r requirements.txt
 
-# Run the server
+# Run the API (pure JSON API — no UI)
 PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Open <http://localhost:8000>.
+Open <http://localhost:8000/api> for the API descriptor. The frontend is served
+separately — see the `web` service in `docker-compose.yml`, or serve
+`frontend/` with any static file server (it calls the API via the configured
+base URL).
 
 > The first feed refresh runs in the background on startup. Subsequent requests
 > are served from the configured store and refresh every 10 minutes; the
@@ -149,7 +163,9 @@ docker compose up --build
 podman-compose up --build
 ```
 
-The SQLite database is stored in the `feed-data` volume.
+`docker compose up` starts two application services: `web` (nginx serving the
+frontend on <http://localhost:8000>) and `api` (the FastAPI backend, internal
+only). The SQLite database is stored in the `feed-data` volume.
 
 ### Alerting environment variables
 
@@ -166,8 +182,9 @@ Without any channel configured, urgent items are logged only.
 
 ### PostgreSQL + OpenSearch via Compose
 
-`docker compose up --build` starts the app plus PostgreSQL. The feed service
-uses `DATABASE_URL=postgresql://feed:feed@postgres:5432/feed`.
+`docker compose up --build` starts the frontend (`web`), the API (`api`), and
+PostgreSQL. The API service uses
+`DATABASE_URL=postgresql://feed:feed@postgres:5432/feed`.
 
 To add OpenSearch search, run:
 
@@ -175,7 +192,7 @@ To add OpenSearch search, run:
 docker compose --profile search up --build
 ```
 
-Then uncomment `OPENSEARCH_URL=http://opensearch:9200` in the `feed` service
+Then uncomment `OPENSEARCH_URL=http://opensearch:9200` in the `api` service
 environment. Without OpenSearch, `/api/search` falls back to SQL (Postgres
 `ILIKE` or SQLite `LIKE`).
 
@@ -192,8 +209,9 @@ Requires `kubectl` and access to a cluster (Kustomize is built into `kubectl`).
 # Deploy the app, PostgreSQL (primary store), ConfigMap, Secret, and PVCs
 kubectl apply -k deploy/k8s
 
-# Watch the pods become ready
+# Watch the pods become ready (frontend `web` and API `api` pods)
 kubectl get pods -l app=security-feed-web -w
+kubectl get pods -l app=security-feed-api -w
 ```
 
 Access the app with a port-forward:
@@ -206,16 +224,19 @@ Then open <http://localhost:8000>.
 
 **What gets deployed** by `kubectl apply -k deploy/k8s`:
 
-- `security-feed-web` — the feed app (Deployment + ClusterIP Service on port
-  80). An init container waits for PostgreSQL before startup, and the app
-  reads `DATABASE_URL` from the `security-feed-web-secrets` Secret.
+- `security-feed-web` — the frontend (nginx Deployment + ClusterIP Service on
+  port 80). It reverse-proxies `/api` to the internal `api` Service.
+- `security-feed-api` — the backend API (Deployment + internal ClusterIP
+  Service `api` on port 8000). An init container waits for PostgreSQL before
+  startup, and the API reads `DATABASE_URL` from the
+  `security-feed-api-secrets` Secret.
 - `postgres` — PostgreSQL primary store (Deployment + `ReadWriteOnce` PVC +
-  ClusterIP Service). Credentials live in `security-feed-web-secrets`.
-- `security-feed-web-data` — `ReadWriteOnce` PVC kept as the SQLite fallback
+  ClusterIP Service). Credentials live in `security-feed-api-secrets`.
+- `security-feed-api-data` — `ReadWriteOnce` PVC kept as the SQLite fallback
   when `DATABASE_URL` is unset.
-- `security-feed-web-config` — ConfigMap for `LOG_LEVEL` and optional alerting
-  env vars. Put real Discord/Slack/email webhook values in a Secret in
-  production rather than the ConfigMap.
+- `security-feed-api-config` — ConfigMap for `LOG_LEVEL`, optional `CORS_ORIGINS`,
+  and optional alerting env vars. Put real Discord/Slack/email webhook values
+  in a Secret in production rather than the ConfigMap.
 
 **OpenSearch is optional and off by default.** To enable it, uncomment
 `opensearch.yaml` in `deploy/k8s/kustomization.yaml` and `OPENSEARCH_URL` in
@@ -226,7 +247,7 @@ Then open <http://localhost:8000>.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/` | Single-page frontend |
+| `GET` | `/api` | API descriptor (name, version, endpoints) |
 | `GET` | `/api/feed` | Normalized feed JSON |
 | `GET` | `/api/items` | Search/filter the persistent archive |
 | `GET` | `/api/search?q=...` | Full-text search (OpenSearch or SQLite) |

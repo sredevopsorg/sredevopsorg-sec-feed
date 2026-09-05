@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -28,12 +27,13 @@ from typing import Any
 import httpx
 
 from . import store
+from .config import settings
 from .fetcher import FeedItem, _ensure_aware, _time_ago, item_to_dict
 
 logger = logging.getLogger(__name__)
 
-OPENSEARCH_URL = os.environ.get("OPENSEARCH_URL")
-INDEX_NAME = os.environ.get("OPENSEARCH_INDEX", "security-feed")
+OPENSEARCH_URL = settings.opensearch_url
+INDEX_NAME = settings.opensearch_index
 
 SEARCH_TIMEOUT = 8.0
 SYNC_INTERVAL = 30 * 60  # seconds between full archive reconciles

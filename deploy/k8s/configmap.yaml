@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: security-feed-web-config
+  name: security-feed-api-config
 data:
   # Alerting env vars (optional; prefer a Secret for webhook URLs).
   # Discord webhook is the primary channel.
@@ -14,4 +14,6 @@ data:
   # opensearch.yaml to the kustomization to enable it. Without it, /api/search
   # falls back to SQL (Postgres ILIKE).
   # OPENSEARCH_URL: "http://opensearch:9200"
+  # Comma-separated allowed CORS origins; defaults to "*" (local dev).
+  # CORS_ORIGINS: "https://feed.example.com"
   LOG_LEVEL: "INFO"

@@ -1,15 +1,18 @@
+# Internal API Service. Named `api` so the frontend nginx config
+# (`proxy_pass http://api:8000`) works identically in Kubernetes and Compose.
 apiVersion: v1
 kind: Service
 metadata:
-  name: security-feed-web
+  name: api
   labels:
-    app: security-feed-web
+    app: security-feed-api
+    component: api
 spec:
   selector:
-    app: security-feed-web
-    component: feed
+    app: security-feed-api
+    component: api
   ports:
     - name: http
-      port: 80
+      port: 8000
       targetPort: http
   type: ClusterIP
