@@ -14,7 +14,6 @@ Rate limits:
 from __future__ import annotations
 
 import logging
-import os
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -22,6 +21,7 @@ from typing import Any
 import httpx
 
 from . import store
+from .config import settings
 from .fetcher import (
     CVE_RE,
     FeedItem,
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 GITHUB_API = "https://api.github.com/repos/ossf/malicious-packages"
 RAW_BASE = "https://raw.githubusercontent.com/ossf/malicious-packages/main"
 REPO_URL = "https://github.com/ossf/malicious-packages"
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+GITHUB_TOKEN = settings.github_token
 
 # Only files whose name looks like a real assigned report ID.
 REPORT_ID_RE = re.compile(r"^MAL-\d{4}-\d+$")

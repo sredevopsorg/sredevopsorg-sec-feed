@@ -1,4 +1,4 @@
-from app.config import Settings
+from app.config import Settings, settings
 
 
 def test_settings_defaults():
@@ -34,3 +34,14 @@ def test_settings_optional_values():
     assert s.opensearch_url == "http://os:9200"
     assert s.github_token == "tok"
     assert s.discord_webhook_url == "https://discord.example.com"
+
+
+def test_modules_read_config_from_settings():
+    """Search, alerts, and OSSF consume the central Settings object."""
+    from app import alerts, ossf, search
+
+    assert search.OPENSEARCH_URL is settings.opensearch_url
+    assert search.INDEX_NAME == settings.opensearch_index
+    assert alerts.DISCORD_WEBHOOK_URL is settings.discord_webhook_url
+    assert alerts.SMTP_PORT == settings.smtp_port
+    assert ossf.GITHUB_TOKEN is settings.github_token
