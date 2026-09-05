@@ -1,8 +1,9 @@
-"""Fetching, normalising, enriching and caching feed items.
+"""Fetching and normalising feed items from upstream sources.
 
 The MVP is deliberately resilient: if the network is unavailable or every
 source fails, a small set of realistic sample items is returned so the
-frontend still renders the full experience.
+frontend still renders the full experience. Orchestration (enrichment,
+persistence, indexing, publishing, alerting) lives in ``app/pipeline.py``.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import json
 import logging
 import re
 import urllib.parse
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -99,25 +99,9 @@ def _is_relevant(source: Source, text: str) -> bool:
     return True
 
 HTTP_TIMEOUT = 8.0
-CACHE_TTL = 600  # seconds
 USER_AGENT = "security-live-feed-mvp/0.1 (+contact: security-team@example.com)"
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "unknown": 0}
-
-
-@dataclass
-class FeedCache:
-    items: list[FeedItem] = field(default_factory=list)
-    fetched_at: datetime | None = None
-    generated_at: datetime | None = None
-    errors: list[str] = field(default_factory=list)
-
-
-CACHE = FeedCache()
-CACHE_LOCK = asyncio.Lock()
-
-
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +453,7 @@ async def _fetch_source(source: Source) -> list[FeedItem]:
 
 
 # ---------------------------------------------------------------------------
-# Caching / public API
+# Deduplication and fetch orchestration
 # ---------------------------------------------------------------------------
 
 def _sort_key(item: FeedItem):
@@ -495,98 +479,30 @@ def _dedupe(items: list[FeedItem]) -> list[FeedItem]:
     return sorted(seen.values(), key=_sort_key, reverse=True)
 
 
-async def refresh_feed() -> list[FeedItem]:
-    """Fetch every source concurrently and rebuild the feed cache."""
-    global CACHE
-    async with CACHE_LOCK:
-        errors: list[str] = []
-        results = await asyncio.gather(
-            *(_fetch_source(source) for source in SOURCES),
-            return_exceptions=True,
-        )
-        items: list[FeedItem] = []
-        for source, result in zip(SOURCES, results):
-            if isinstance(result, BaseException):
-                errors.append(f"{source.id}: {type(result).__name__}: {result}")
-                continue
-            items.extend(result)
-        if not items:
-            logger.warning("All live sources failed or returned empty; serving sample feed")
-            items = _sample_items()
-        else:
-            # Always keep the sample feed available if the live feed is tiny.
-            if len(items) < 4:
-                items.extend(_sample_items())
-        items = _dedupe(items)
+async def fetch_all() -> tuple[list[FeedItem], list[str]]:
+    """Fetch every source concurrently, normalize, dedupe, and apply the sample
+    fallback. Returns ``(items, errors)``.
 
-        # Best-effort enrichment (CISA KEV + FIRST EPSS). Failures are logged
-        # inside enrich_items and never break the feed.
-        from .enrich import enrich_items
-
-        try:
-            items = await enrich_items(items)
-        except Exception:
-            logger.exception("Unexpected enrichment error; continuing with raw items")
-
-        # Best-effort OSV.dev enrichment (affected packages, fixed versions,
-        # severity). Also logs and continues on failure.
-        from .osv import enrich_with_osv
-
-        try:
-            items = await enrich_with_osv(items)
-        except Exception:
-            logger.exception("Unexpected OSV enrichment error; continuing")
-
-        CACHE = FeedCache(items=items, fetched_at=datetime.now(timezone.utc), generated_at=datetime.now(timezone.utc), errors=errors)
-
-        # Persist and notify SSE subscribers.
-        from . import store
-        from .events import broker
-
-        try:
-            await asyncio.to_thread(store.upsert_items, items)
-        except Exception:
-            logger.exception("Failed to persist feed items")
-
-        # Best-effort search indexing (OpenSearch if configured). Ensure the
-        # index exists, index this refresh's items, and reconcile the full
-        # archive on a throttled schedule to catch drift.
-        try:
-            from . import search
-
-            await search.ensure_index()
-            await search.index_items(items)
-            await search.maybe_sync_archive()
-        except Exception:
-            logger.exception("Search indexing failed")
-
-        await broker.publish(
-            {
-                "type": "feed_updated",
-                "generated_at": CACHE.generated_at.isoformat(),
-                "count": len(items),
-            }
-        )
-
-        # Deliver alerts for any urgent items we have not notified about yet.
-        try:
-            from . import alerts
-
-            alerted = await alerts.send_urgent_alerts()
-            if alerted:
-                logger.info("Sent %d urgent alert(s)", len(alerted))
-        except Exception:
-            logger.exception("Alerting failed")
-        return CACHE.items
-
-
-async def get_feed(limit: int = 50) -> FeedCache:
-    """Return a cached feed. Refresh synchronously if this is the first call."""
-    if CACHE.generated_at is None:
-        await refresh_feed()
-    if CACHE.fetched_at is None or (datetime.now(timezone.utc) - CACHE.fetched_at).total_seconds() > CACHE_TTL:
-        # Best-effort background refresh; do not block the response.
-        asyncio.create_task(refresh_feed())
-    return CACHE
+    Enrichment, persistence, indexing, publishing, and alerting are handled by
+    the orchestrator in ``app/pipeline.py`` (ADR-0004).
+    """
+    errors: list[str] = []
+    results = await asyncio.gather(
+        *(_fetch_source(source) for source in SOURCES),
+        return_exceptions=True,
+    )
+    items: list[FeedItem] = []
+    for source, result in zip(SOURCES, results):
+        if isinstance(result, BaseException):
+            errors.append(f"{source.id}: {type(result).__name__}: {result}")
+            continue
+        items.extend(result)
+    if not items:
+        logger.warning("All live sources failed or returned empty; serving sample feed")
+        items = _sample_items()
+    elif len(items) < 4:
+        # Always keep the sample feed available if the live feed is tiny.
+        items.extend(_sample_items())
+    return _dedupe(items), errors
 
 

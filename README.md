@@ -81,7 +81,8 @@ backend's `CORS_ORIGINS` setting.
 │   ├── models.py         # Domain model (FeedItem) + serialization (ADR-0004)
 │   ├── main.py           # FastAPI API routes (pure JSON API)
 │   ├── sources.py        # Source definitions
-│   ├── fetcher.py        # Fetching, normalization, caching
+│   ├── fetcher.py        # Fetching + normalization of upstream sources
+│   ├── pipeline.py       # Refresh orchestration: fetch → enrich → persist → …
 │   ├── enrich.py         # CISA KEV + EPSS enrichment
 │   ├── osv.py            # OSV.dev enrichment (affected/fixed/severity)
 │   ├── search.py         # Search backend (OpenSearch + SQLite fallback)
