@@ -78,6 +78,7 @@ backend's `CORS_ORIGINS` setting.
 ├── app/
 │   ├── __init__.py       # Package marker
 │   ├── config.py         # Centralized Settings (ADR-0002)
+│   ├── models.py         # Domain model (FeedItem) + serialization (ADR-0004)
 │   ├── main.py           # FastAPI API routes (pure JSON API)
 │   ├── sources.py        # Source definitions
 │   ├── fetcher.py        # Fetching, normalization, caching
@@ -85,8 +86,9 @@ backend's `CORS_ORIGINS` setting.
 │   ├── osv.py            # OSV.dev enrichment (affected/fixed/severity)
 │   ├── search.py         # Search backend (OpenSearch + SQLite fallback)
 │   ├── ossf.py           # OpenSSF Malicious Packages GitHub-API source
-│   ├── store.py          # Storage facade (Postgres or SQLite)
-│   ├── postgres_store.py # PostgreSQL storage implementation
+│   ├── store.py          # Storage facade/port (selects backend; ADR-0003)
+│   ├── sqlite_store.py   # SQLite storage adapter
+│   ├── postgres_store.py # PostgreSQL storage adapter
 │   ├── events.py         # SSE pub/sub broker
 │   └── alerts.py         # Discord / Slack / email / log alerting
 ├── frontend/

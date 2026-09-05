@@ -39,6 +39,7 @@ readable.
 
 ```text
 app/config.py      Centralized Settings (environment-driven; ADR-0002)
+app/models.py      Domain model (FeedItem) + serialization (ADR-0004)
 app/main.py        FastAPI API routes and app startup (pure JSON API)
 app/sources.py     Source definitions (add new feeds here)
 app/fetcher.py     Fetching, parsing, normalization, caching
@@ -46,8 +47,9 @@ app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)
 app/osv.py         OSV.dev enrichment (affected/fixed/severity, best-effort)
 app/search.py      Search backend (OpenSearch if configured, SQL fallback)
 app/ossf.py         OpenSSF Malicious Packages source (GitHub API + cursor)
-app/store.py       Storage facade (delegates to Postgres when DATABASE_URL is set)
-app/postgres_store.py  PostgreSQL storage implementation
+app/store.py       Storage facade/port (selects sqlite or postgres backend)
+app/sqlite_store.py    SQLite storage adapter
+app/postgres_store.py  PostgreSQL storage adapter
 app/events.py      SSE pub/sub broker
 app/alerts.py      Discord / Slack / email / log alerts for urgent items
 frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step)
@@ -101,7 +103,7 @@ tests/             Unit tests for feed and store logic
 ## Feed item contract
 
 Every item must be normalized to the `FeedItem` dataclass in
-`app/fetcher.py`:
+`app/models.py` (re-exported by `app/fetcher.py`):
 
 - `id` — stable hash of URL + title
 - `title`, `summary`, `url`, `source`, `source_url`
