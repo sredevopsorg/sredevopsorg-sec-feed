@@ -1,4 +1,4 @@
-"""FastAPI entry point for the security live-feed MVP."""
+"""FastAPI entry point for the security live-feed API."""
 
 from __future__ import annotations
 
@@ -6,22 +6,20 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
 
 from . import fetcher
 from . import search as search_backend
 from . import store
+from .config import settings
 from .events import broker
 from .sources import SOURCES
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
-
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
 @asynccontextmanager
@@ -43,7 +41,18 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Security Intelligence Live Feed", version="0.2.0-rc.1", lifespan=lifespan)
+app = FastAPI(title="Security Intelligence Live Feed API", version="0.2.0-rc.1", lifespan=lifespan)
+
+# Allow the separately-hosted frontend to call this API cross-origin. The
+# default ("*") is permissive for local development; set CORS_ORIGINS to a
+# comma-separated allow-list in production.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(settings.cors_origins),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
@@ -141,7 +150,19 @@ async def api_sources() -> dict:
     }
 
 
-# Serve the frontend as a static site. This mount is registered last so the
-# /api/* and /health routes above take precedence. It is kept here only for
-# single-container convenience; the API itself does not depend on it.
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+@app.get("/api")
+async def api_index() -> dict:
+    """Service descriptor listing the available endpoints."""
+    return {
+        "name": app.title,
+        "version": app.version,
+        "endpoints": [
+            "/health",
+            "/api/feed",
+            "/api/items",
+            "/api/stats",
+            "/api/search",
+            "/api/events",
+            "/api/sources",
+        ],
+    }

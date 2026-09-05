@@ -17,7 +17,7 @@ Run these from the repository root.
 # Install dependencies (vendored into ./.pip-packages)
 python3 -m pip install --target ./.pip-packages -r requirements.txt
 
-# Run the server
+# Run the API (pure JSON API — the frontend is served separately)
 PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # Run tests
@@ -38,7 +38,8 @@ readable.
 ## Repository layout
 
 ```text
-app/main.py        FastAPI routes and app startup
+app/config.py      Centralized Settings (environment-driven; ADR-0002)
+app/main.py        FastAPI API routes and app startup (pure JSON API)
 app/sources.py     Source definitions (add new feeds here)
 app/fetcher.py     Fetching, parsing, normalization, caching
 app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)

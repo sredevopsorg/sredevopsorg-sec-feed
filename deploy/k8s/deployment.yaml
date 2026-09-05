@@ -1,20 +1,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: security-feed-web
+  name: security-feed-api
   labels:
-    app: security-feed-web
+    app: security-feed-api
+    component: api
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: security-feed-web
-      component: feed
+      app: security-feed-api
+      component: api
   template:
     metadata:
       labels:
-        app: security-feed-web
-        component: feed
+        app: security-feed-api
+        component: api
     spec:
       initContainers:
         # Wait for PostgreSQL and ensure the application database exists.
@@ -27,7 +28,7 @@ spec:
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: security-feed-web-secrets
+                  name: security-feed-api-secrets
                   key: POSTGRES_PASSWORD
           command:
             - sh
@@ -41,7 +42,7 @@ spec:
                 "SELECT 1 FROM pg_database WHERE datname = 'feed'" | grep -q 1 || \
               psql -h postgres -p 5432 -U feed -d postgres -c "CREATE DATABASE feed"
       containers:
-        - name: feed
+        - name: api
           image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
           imagePullPolicy: Always
           ports:
@@ -49,14 +50,14 @@ spec:
               name: http
           envFrom:
             - configMapRef:
-                name: security-feed-web-config
+                name: security-feed-api-config
           env:
             - name: SECURITY_FEED_DB
               value: /app/data/feed.db
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: security-feed-web-secrets
+                  name: security-feed-api-secrets
                   key: DATABASE_URL
           readinessProbe:
             httpGet:
@@ -83,4 +84,4 @@ spec:
       volumes:
         - name: feed-data
           persistentVolumeClaim:
-            claimName: security-feed-web-data
+            claimName: security-feed-api-data

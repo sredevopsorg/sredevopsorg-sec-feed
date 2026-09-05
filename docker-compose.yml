@@ -1,11 +1,24 @@
 services:
-  feed:
-    build: .
+  # Frontend: static single-page app served by nginx, reverse-proxying /api to
+  # the backend so the browser keeps a single origin. To host the frontend on a
+  # different origin, set window.__API_BASE_URL__ in frontend/config.js and
+  # configure CORS_ORIGINS on the api service.
+  web:
+    build: ./frontend
     ports:
-      - "8000:8000"
+      - "8000:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # Backend: pure JSON API (no UI assets).
+  api:
+    build: .
     environment:
       - SECURITY_FEED_DB=/app/data/feed.db
       # - DATABASE_URL=postgresql://feed:feed@postgres:5432/feed
+      # Comma-separated allowed CORS origins; defaults to "*" (local dev).
+      # - CORS_ORIGINS=https://feed.example.com,https://cdn.example.com
       # Alerting channels (uncomment and set; prefer a secrets file in prod).
       # Discord is the primary channel:
       # - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
@@ -40,8 +53,8 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # One-shot helper: ensure the application database exists before the feed
-  # app starts (the postgres image only creates POSTGRES_DB on first init).
+  # One-shot helper: ensure the application database exists before the API
+  # starts (the postgres image only creates POSTGRES_DB on first init).
   postgres-init:
     image: docker.io/postgres:16-alpine
     depends_on:
