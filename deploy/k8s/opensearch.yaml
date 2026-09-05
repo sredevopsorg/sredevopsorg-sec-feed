@@ -6,9 +6,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: security-feed-web-opensearch
+  name: security-feed-api-opensearch
   labels:
-    app: security-feed-web
+    app: security-feed-api
 spec:
   accessModes:
     - ReadWriteOnce
@@ -21,10 +21,10 @@ kind: Service
 metadata:
   name: opensearch
   labels:
-    app: security-feed-web
+    app: security-feed-api
 spec:
   selector:
-    app: security-feed-web
+    app: security-feed-api
     component: opensearch
   ports:
     - name: http
@@ -35,20 +35,20 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: security-feed-web-opensearch
+  name: security-feed-api-opensearch
   labels:
-    app: security-feed-web
+    app: security-feed-api
     component: opensearch
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: security-feed-web
+      app: security-feed-api
       component: opensearch
   template:
     metadata:
       labels:
-        app: security-feed-web
+        app: security-feed-api
         component: opensearch
     spec:
       securityContext:
@@ -103,4 +103,4 @@ spec:
       volumes:
         - name: opensearch-data
           persistentVolumeClaim:
-            claimName: security-feed-web-opensearch
+            claimName: security-feed-api-opensearch

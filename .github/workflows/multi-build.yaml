@@ -171,6 +171,42 @@ jobs:
           retention-days: 1
 
 
+  build-frontend:
+    # Builds and pushes the static frontend (nginx) image as ghcr.io/<repo>:web
+    # for both platforms in a single buildx push (the nginx base is multi-arch,
+    # so no manifest-merge step is needed).
+    name: Build frontend image (multi-platform)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.GHCR_IMAGE }}:web
+            ${{ env.GHCR_IMAGE }}:web-${{ github.ref_name }}
+
   merge:
     # This job merges the Docker manifests for the different platforms built in the previous job.
     name: Merge Docker manifests
