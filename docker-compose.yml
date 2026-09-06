@@ -1,18 +1,22 @@
+# Base services. For local development run `docker compose up` (the dev
+# override in docker-compose.override.yml is applied automatically). For
+# production run:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 services:
-  # Frontend: static single-page app served by nginx, reverse-proxying /api to
-  # the backend so the browser keeps a single origin. To host the frontend on a
-  # different origin, set window.__API_BASE_URL__ in frontend/config.js and
-  # configure CORS_ORIGINS on the api service.
+  # Frontend: static single-page app served by non-root nginx, reverse-proxying
+  # /api to the backend so the browser keeps a single origin. To host the
+  # frontend on a different origin, set window.__API_BASE_URL__ in
+  # frontend/config.js and configure CORS_ORIGINS on the api service.
   web:
     build: ./frontend
     ports:
-      - "8000:80"
+      - "8000:8080"
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
 
-  # Backend: pure JSON API (no UI assets).
+  # Backend: pure JSON API (no UI assets), runs as a non-root user.
   api:
     build: .
     environment:
@@ -56,6 +60,7 @@ services:
       - POSTGRES_USER=feed
       - POSTGRES_PASSWORD=feed
       - POSTGRES_DB=feed
+    shm_size: 128mb
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:

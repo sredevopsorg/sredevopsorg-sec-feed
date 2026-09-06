@@ -7,6 +7,8 @@ metadata:
   labels:
     app: security-feed-api
 spec:
+  # ReadWriteOnce is preferable for PostgreSQL (single-writer); kept as the
+  # cluster's Longhorn RWX storage class for this deployment.
   accessModes:
     - ReadWriteMany
   storageClassName: "longhorn-rwx"
@@ -49,6 +51,12 @@ spec:
         app: security-feed-api
         component: postgres
     spec:
+      securityContext:
+        # The postgres image's entrypoint runs as root to chown the data dir
+        # before dropping to UID 999, so runAsNonRoot/capabilities are left to
+        # the image defaults to avoid breaking first-run init on this PVC.
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:16-alpine

@@ -7,6 +7,12 @@ metadata:
     component: api
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  minReadySeconds: 5
   selector:
     matchLabels:
       app: security-feed-api
@@ -17,6 +23,14 @@ spec:
         app: security-feed-api
         component: api
     spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         # Wait for PostgreSQL and ensure the application database exists.
         # The postgres image only creates POSTGRES_DB on first init, so check
@@ -44,10 +58,16 @@ spec:
       containers:
         - name: api
           image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
-          imagePullPolicy: Always
+          # Pin to a version tag or digest in production for reproducibility.
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
               name: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           envFrom:
             - configMapRef:
                 name: security-feed-api-config

@@ -8,6 +8,10 @@ resources:
   - configmap.yaml
   - secret.yaml
   - postgres.yaml
+  - pdb.yaml
+  # Optional: uncomment to expose the frontend via an Ingress (needs an
+  # Ingress controller and a real host/TLS).
+  # - ingress.yaml
   # OpenSearch is optional and off by default (not a current priority). To
   # enable it, uncomment the line below and uncomment OPENSEARCH_URL in
   # configmap.yaml.

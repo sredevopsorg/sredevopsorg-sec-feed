@@ -1,5 +1,5 @@
-# Frontend: static single-page app served by nginx, reverse-proxying /api to
-# the internal `api` Service.
+# Frontend: static single-page app served by non-root nginx (listens on 8080),
+# reverse-proxying /api to the internal `api` Service.
 apiVersion: v1
 kind: Service
 metadata:
@@ -26,6 +26,11 @@ metadata:
     component: web
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: security-feed-web
@@ -36,13 +41,25 @@ spec:
         app: security-feed-web
         component: web
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: web
           image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 80
+            - containerPort: 8080
               name: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           readinessProbe:
             httpGet:
               path: /

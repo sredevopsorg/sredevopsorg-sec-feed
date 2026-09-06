@@ -1,0 +1,40 @@
+# PodDisruptionBudgets keep at least one replica available during voluntary
+# disruptions (node drains, etc.).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: security-feed-api
+  labels:
+    app: security-feed-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: security-feed-api
+      component: api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: security-feed-web
+  labels:
+    app: security-feed-web
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: security-feed-web
+      component: web
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: security-feed-api-postgres
+  labels:
+    app: security-feed-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: security-feed-api
+      component: postgres
