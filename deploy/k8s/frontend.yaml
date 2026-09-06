@@ -51,9 +51,9 @@ spec:
       containers:
         - name: web
           image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
-            - containerPort: 8080
+            - containerPort: 80
               name: http
           securityContext:
             allowPrivilegeEscalation: false
