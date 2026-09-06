@@ -1,6 +1,6 @@
 # ADR-0003: Single Storage port with SQLite and PostgreSQL adapters
 
-- Status: Accepted
+- Status: Accepted (implemented)
 - Date: 2025-09-05
 
 ## Context

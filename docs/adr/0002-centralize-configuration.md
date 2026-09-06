@@ -1,6 +1,6 @@
 # ADR-0002: Centralize configuration in a Settings object
 
-- Status: Accepted
+- Status: Accepted (implemented)
 - Date: 2025-09-05
 
 ## Context

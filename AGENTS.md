@@ -54,7 +54,9 @@ app/postgres_store.py  PostgreSQL storage adapter
 app/events.py      SSE pub/sub broker
 app/alerts.py      Discord / Slack / email / log alerts for urgent items
 frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step)
-tests/             Unit tests for feed and store logic
+tests/             Unit tests for feed, store, search, config, API, and pipeline
+docs/              Architecture review (docs/architecture.md) + ADRs (docs/adr/)
+deploy/k8s/        Kubernetes manifests (api, frontend, postgres, optional OpenSearch)
 ```
 
 ## Critical invariants
@@ -65,13 +67,13 @@ tests/             Unit tests for feed and store logic
    calls through the configured base URL rather than hardcoding `/api/...`.
 2. **The feed must never render empty.** `fetcher.py` provides sample fallback
    data when all live sources fail. Preserve that behavior.
-3. **Never block the API on a slow source.** `get_feed()` returns the cached
-   feed immediately and refreshes in the background.
+3. **Never block the API on a slow source.** `pipeline.get_feed()` returns the
+   cached feed immediately and refreshes in the background.
 4. **Sample rows must stay hidden once live rows exist.** `store.query_feed()`
    excludes `is_sample=1` when `is_sample=0` rows are present.
-4. **Respect source rate limits and terms.** All HTTP calls must keep the
+5. **Respect source rate limits and terms.** All HTTP calls must keep the
    current `USER_AGENT` and `HTTP_TIMEOUT`.
-5. **Keep tests passing.** Every change to parsing/enrichment should add or
+6. **Keep tests passing.** Every change to parsing/enrichment should add or
    update a test in `tests/test_feed.py`.
 
 ## Adding a source
