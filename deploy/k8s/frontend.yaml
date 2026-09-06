@@ -42,10 +42,10 @@ spec:
         component: web
     spec:
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 101
-        runAsGroup: 101
-        fsGroup: 101
+        # runAsNonRoot: true
+        # runAsUser: 101
+        # runAsGroup: 101
+        # fsGroup: 101
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -57,9 +57,9 @@ spec:
               name: http
           securityContext:
             allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
+            # capabilities:
+            #   drop:
+            #     - ALL
           readinessProbe:
             httpGet:
               path: /
