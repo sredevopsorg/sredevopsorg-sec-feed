@@ -1,10 +1,13 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+    
+
+permissions:
+  # Global permissions for the workflow, which can be overridden at the job level
+  contents: read
 
 jobs:
   test:

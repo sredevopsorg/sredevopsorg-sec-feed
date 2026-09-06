@@ -20,3 +20,5 @@ data/
 .tmp/
 .config/
 .local/
+
+mount/

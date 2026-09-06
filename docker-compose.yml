@@ -9,19 +9,25 @@ services:
   # frontend/config.js and configure CORS_ORIGINS on the api service.
   web:
     build: ./frontend
+    container_name: web
     ports:
-      - "8000:8080"
-    depends_on:
-      api:
-        condition: service_healthy
+      - "8080:80"
+    # depends_on:
+    #   api:
+    #     condition: service_healthy
     restart: unless-stopped
+    networks:
+      - sredevops-sec-feed
+
 
   # Backend: pure JSON API (no UI assets), runs as a non-root user.
   api:
     build: .
+    container_name: api
+    hostname: api
     environment:
-      - SECURITY_FEED_DB=/app/data/feed.db
       # - DATABASE_URL=postgresql://feed:feed@postgres:5432/feed
+      - SECURITY_FEED_DB=/app/data/feed.db
       # Comma-separated allowed CORS origins; defaults to "*" (local dev).
       # - CORS_ORIGINS=https://feed.example.com,https://cdn.example.com
       # Alerting channels (uncomment and set; prefer a secrets file in prod).
@@ -35,48 +41,56 @@ services:
       # the optional OpenSearch search backend.
       # - OPENSEARCH_URL=http://opensearch:9200
     volumes:
-      - feed-data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      postgres-init:
-        condition: service_completed_successfully
+      - ./mount/feed-data:/app/data
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
+    #   postgres-init:
+    #     condition: service_completed_successfully
     # No curl in the slim image; probe /health with the stdlib only.
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+    # healthcheck:
+    #   test:
+    #     - CMD
+    #     - python
+    #     - -c
+    #     - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+    #   start_period: 15s
     restart: unless-stopped
+    ports:
+      - 8000:8000
+    networks:
+      - sredevops-sec-feed
 
   postgres:
     image: docker.io/postgres:16-alpine
+    container_name: postgres
     environment:
       - POSTGRES_USER=feed
       - POSTGRES_PASSWORD=feed
       - POSTGRES_DB=feed
     shm_size: 128mb
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ./mount/postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U feed -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - sredevops-sec-feed
 
   # One-shot helper: ensure the application database exists before the API
   # starts (the postgres image only creates POSTGRES_DB on first init).
   postgres-init:
     image: docker.io/postgres:16-alpine
-    depends_on:
-      postgres:
-        condition: service_healthy
+    container_name: postgres-init
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
     environment:
       - PGPASSWORD=feed
     entrypoint: ["/bin/sh", "-c"]
@@ -84,7 +98,9 @@ services:
       - |
         psql -h postgres -U feed -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='feed'" | grep -q 1 || \
         psql -h postgres -U feed -d postgres -c "CREATE DATABASE feed"
-    restart: "no"
+    restart: unless-stopped
+    networks:
+      - sredevops-sec-feed
 
   opensearch:
     image: docker.io/opensearchproject/opensearch:2
@@ -96,15 +112,21 @@ services:
     ports:
       - "9200:9200"
     volumes:
-      - opensearch-data:/usr/share/opensearch/data
+      - ./mount/opensearch-data:/usr/share/opensearch/data
     healthcheck:
       test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 10
     restart: unless-stopped
+    networks:
+      - sredevops-sec-feed
 
-volumes:
-  feed-data:
-  postgres-data:
-  opensearch-data:
+# volumes:
+#   feed-data:
+#   postgres-data:
+#   opensearch-data:
+
+networks:
+  sredevops-sec-feed:
+    driver: bridge

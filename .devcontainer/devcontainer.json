@@ -3,20 +3,16 @@
   "dockerComposeFile": ["../docker-compose.yml", "../docker-compose.override.yml"],
   "service": "api",
   "workspaceFolder": "/app",
-  "overrideCommand": true,
-  "command": "sleep infinity",
-  "remoteUser": "root",
   "shutdownAction": "stopCompose",
-  "forwardPorts": [8000],
+  "forwardPorts": [8080],
   "customizations": {
     "vscode": {
       "extensions": [
         "ms-python.python",
-        "ms-python.debugpy",
-        "eamodio.gitlens"
+        "ms-python.debugpy"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/usr/local/bin/python"
+        "python.defaultInterpreterPath": "/usr/bin/python3"
       }
     }
   },

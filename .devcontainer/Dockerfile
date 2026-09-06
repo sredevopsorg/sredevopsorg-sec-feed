@@ -11,8 +11,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
-
-COPY requirements-dev.txt ./
+COPY requirements.txt /app/
+COPY requirements-dev.txt /app/
 RUN pip install -r requirements-dev.txt
 
 # Keeps the container alive for VS Code to attach. The dev compose override
