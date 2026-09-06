@@ -1,14 +1,16 @@
 # Architecture Review — Security Intelligence Live Feed
 
-Status: Accepted (living document)
+Status: Implemented (living document)
 Date: 2025-09-05
 
-This document records the current-state analysis and the target architecture
-for the `sredevopsorg-sec-feed` repository. It is intentionally short: each
-material decision links to an Architecture Decision Record under
-[`docs/adr/`](./adr/).
+This document records the original-state analysis, the target architecture, and
+the delivery of the refactor for the `sredevopsorg-sec-feed` repository. It is
+intentionally short: each material decision links to an Architecture Decision
+Record under [`docs/adr/`](./adr/).
 
-## 1. Current state (C4 — Context and Container)
+The refactor is **complete** — see the [delivery record](#5-delivery-record).
+
+## 1. Original state (pre-refactor, C4 — Context and Container)
 
 ```text
 ┌──────────┐   HTTP (same origin)    ┌─────────────────────────────────────┐
@@ -24,52 +26,26 @@ material decision links to an Architecture Decision Record under
                      (NVD, CISA, …)     (runtime-selected)   Discord/Slack/SMTP
 ```
 
-One deployable serves both the JSON API and the single-page frontend. Storage
-is a runtime switch between two parallel implementations (`store.py` for
+One deployable served both the JSON API and the single-page frontend. Storage
+was a runtime switch between two parallel implementations (`store.py` for
 SQLite, `postgres_store.py` for PostgreSQL) selected by the presence of
 `DATABASE_URL`. The fetch → normalize → enrich → persist → index → publish →
-alert pipeline is a single coroutine, `refresh_feed()`, living in a 778-line
+alert pipeline was a single coroutine, `refresh_feed()`, living in a 778-line
 `app/fetcher.py`.
 
-## 2. Observations (ranked by impact on simplicity and separation)
+## 2. Observations and resolution
 
-1. **Frontend and backend are the same deployable.** `app/main.py` mounts
-   `static/` and serves `index.html`; the JavaScript hardcodes same-origin
-   `/api/*` paths. There is no CORS and no configurable API origin, so the UI
-   cannot be hosted, versioned, or scaled independently of the API.
+| # | Observation | Resolution |
+|---|---|---|
+| 1 | Frontend and backend are the same deployable; hardcoded same-origin `/api/*`; no CORS/configurable origin. | ✅ Resolved — ADR-0001 |
+| 2 | Configuration captured at import time via scattered `os.environ.get`. | ✅ Resolved — ADR-0002 |
+| 3 | Storage backend duplication with per-function `if _use_postgres()` branching. | ✅ Resolved — ADR-0003 |
+| 4 | Tangled dependency direction / god module (`fetcher.py`); domain model inside the I/O module. | ✅ Resolved — ADR-0004 |
+| 5 | Global mutable state (`CACHE`, `broker`, `_kev_cache`, `_last_sync_at`). | ⏸ Partially resolved — `CACHE` relocated to `pipeline.py`; the remaining module globals are acceptable for a single-process app. |
+| 6 | Duplicated domain rule ("hide sample rows once live rows exist") across both backends. | ⏸ Deferred — the two adapters still each implement it. |
+| 7 | No API contract schemas (raw dicts); no route/SSE integration tests. | ⏸ Deferred — surface tests were added (`test_api.py`, `test_pipeline.py`); typed response models remain future work. |
 
-2. **Configuration is captured at import time.** `DATABASE_URL`,
-   `OPENSEARCH_URL`, webhook URLs, and SMTP settings are read with
-   `os.environ.get(...)` at module scope. This freezes settings at process
-   start, makes injection/testing awkward, and scatters configuration across
-   many modules.
-
-3. **Storage backend duplication.** `store.py` and `postgres_store.py`
-   duplicate the entire schema and every query, with an `if _use_postgres()`
-   branch in each public function. There is no single interface (port) that
-   the two adapters implement, so the two implementations can drift.
-
-4. **Tangled dependency direction / god module.** `app/fetcher.py` performs
-   fetching, parsing, normalization, enrichment, persistence, indexing,
-   event publishing, and alerting, and it lazily imports `store`, `events`,
-   `search`, `alerts`, `enrich`, and `osv` to dodge circular imports. The
-   domain model (`FeedItem`) lives inside the I/O module, and `store.py`
-   imports it back from `fetcher.py` — a circular dependency at the model
-   layer.
-
-5. **Global mutable state.** `CACHE`, `broker`, `_kev_cache`, and
-   `_last_sync_at` are module-level globals, making behaviour harder to test
-   and reason about.
-
-6. **Duplicated domain rule.** The "hide sample rows once live rows exist"
-   rule is re-implemented in `query_feed`, `search_feed`, and
-   `unalerted_urgent_items`, in both storage backends.
-
-7. **No API contract schemas.** Routes return hand-built dictionaries; the
-   feed-item shape is documented only in prose. Test coverage is helper-level
-   only — there are no route/API integration tests and no SSE test.
-
-## 3. Target architecture (C4 — Container)
+## 3. Current architecture (implemented, C4 — Container)
 
 ```text
 ┌──────────┐   HTTP(S)   ┌────────────────────┐      ┌──────────────────────────┐
@@ -87,39 +63,51 @@ alert pipeline is a single coroutine, `refresh_feed()`, living in a 778-line
   configurable base URL and supports same-origin (reverse-proxied) or
   cross-origin (CORS) operation.
 - **`api`** — FastAPI serving only `/api/*` and `/health`. No UI assets.
-- **`postgres` / `opensearch`** — unchanged optional backing services.
+- **`postgres` / `opensearch`** — optional backing services.
 
-Component-level target (backend):
+Component-level (backend), all implemented:
 
-- A `Settings` object centralises environment-driven configuration.
-- A `Storage` port (interface) with SQLite and PostgreSQL adapters replaces the
-  duplicated facades and removes per-call branching.
-- A `models` (domain) module owns `FeedItem` and serialization, breaking the
-  `fetcher ↔ store` cycle.
-- The refresh pipeline is a small orchestrator with one-way dependencies
-  (`fetch → enrich → persist → index → publish → alert`) rather than one god
-  coroutine.
+- `app/config.py` — a single `Settings` object centralizes environment-driven
+  configuration (ADR-0002).
+- `app/models.py` — the `FeedItem` domain model and serialization, breaking the
+  `fetcher ↔ store` cycle (ADR-0004).
+- `app/store.py` — a `Storage` port/facade that selects one backend
+  (`sqlite_store.py` or `postgres_store.py`) once (ADR-0003).
+- `app/pipeline.py` — the refresh orchestrator with one-way dependencies:
+  `fetch → enrich → persist → index → publish → alert` (ADR-0004). `fetcher.py`
+  now only fetches and normalizes (`fetch_all()`).
 
 ## 4. Decision log
 
-| ADR | Decision |
-|---|---|
-| [0001](./adr/0001-separate-frontend-and-backend.md) | Split frontend and backend into separate deployables; dependency-free frontend; configurable API origin + CORS. |
-| [0002](./adr/0002-centralize-configuration.md) | Centralise configuration in a `Settings` object. |
-| [0003](./adr/0003-storage-port-and-adapters.md) | Define a single `Storage` port with SQLite + PostgreSQL adapters. |
-| [0004](./adr/0004-domain-models-and-refresh-pipeline.md) | Extract a domain `models` module and decompose the refresh pipeline. |
+| ADR | Decision | Status |
+|---|---|---|
+| [0001](./adr/0001-separate-frontend-and-backend.md) | Split frontend and backend into separate deployables; dependency-free frontend; configurable API origin + CORS. | Implemented |
+| [0002](./adr/0002-centralize-configuration.md) | Centralize configuration in a `Settings` object. | Implemented |
+| [0003](./adr/0003-storage-port-and-adapters.md) | Define a single `Storage` port with SQLite + PostgreSQL adapters. | Implemented |
+| [0004](./adr/0004-domain-models-and-refresh-pipeline.md) | Extract a domain `models` module and decompose the refresh pipeline. | Implemented |
 
-## 5. Delivery plan
+## 5. Delivery record
 
-Each improvement is delivered as its own pull request so it can be reviewed and
-merged independently:
+Each improvement was delivered as its own pull request, reviewed, and merged:
 
-1. **PR `docs/architecture-review`** — this review and the ADRs (docs only).
-2. **PR `refactor/frontend-extraction`** — extract the UI into a self-contained
-   `frontend/` directory with a configurable API base URL (still served by the
-   backend to keep the app runnable in the interim).
-3. **PR `refactor/backend-pure-api`** — turn the backend into a pure API
-   (CORS + `Settings`), split the deployment into `web` (nginx) and `api`
-   containers, and update Compose/Kubernetes/CI.
-4. **PR `refactor/storage-port`** — introduce the `Storage` port, extract the
-   domain model, and remove the SQLite/PostgreSQL duplication.
+1. **`docs/architecture-review`** — this review and the ADRs (docs only).
+2. **`refactor/frontend-extraction`** — extract the UI into `frontend/` with a
+   configurable API base URL.
+3. **`refactor/backend-pure-api`** — pure API (CORS + `Settings`), split into
+   `web` (nginx) and `api` containers; Compose/Kubernetes/CI updated.
+4. **`refactor/storage-port`** — `Storage` port + adapters, extract the domain
+   model, remove per-call backend branching.
+5. **`refactor/config-centralization`** — route the remaining env reads
+   (search/alerts/ossf) through `Settings`.
+6. **`refactor/refresh-pipeline`** — decompose `refresh_feed()` into the
+   explicit `fetch → enrich → persist → index → publish → alert` pipeline.
+
+All branches were consolidated onto `main`.
+
+## 6. Remaining follow-ups (deferred, not blocking)
+
+- Type the API responses with Pydantic models (observation #7).
+- Share the "hide sample rows" rule and row-mapping across the two storage
+  adapters, or move to an ORM (observation #6).
+- Consider dependency injection for the remaining module-level globals if the
+  app ever grows beyond a single process (observation #5).

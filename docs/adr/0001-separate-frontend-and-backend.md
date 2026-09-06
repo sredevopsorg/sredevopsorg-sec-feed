@@ -1,6 +1,6 @@
 # ADR-0001: Separate the frontend from the backend
 
-- Status: Accepted
+- Status: Accepted (implemented)
 - Date: 2025-09-05
 
 ## Context

@@ -16,12 +16,17 @@ The UI mirrors the dark "Live Intelligence Feed" design with:
 
 ## Status
 
-Iteration 6. The feed works end-to-end: live sources are fetched, normalized
-(including distro patch status), enriched (CISA KEV + EPSS + OSV.dev),
-deduplicated, prioritized, persisted to PostgreSQL (or SQLite locally),
-searchable (`/api/search`), pushed to the browser over SSE, rendered in a
-single-page frontend, and urgent items trigger alerts via
-Discord/Slack/email/log channels.
+The feed works end-to-end: live sources are fetched, normalized (including
+distro patch status), enriched (CISA KEV + EPSS + OSV.dev), deduplicated,
+prioritized, persisted to PostgreSQL (or SQLite locally), searchable
+(`/api/search`), pushed to the browser over SSE, rendered in a single-page
+frontend, and urgent items trigger alerts via Discord/Slack/email/log channels.
+
+The architectural refactor is complete (see `docs/architecture.md`): the
+frontend and backend are separate deployables, configuration is centralized, a
+single `Storage` port backs SQLite/PostgreSQL adapters, the domain model is
+extracted, and the refresh runs as an explicit
+`fetch → enrich → persist → index → publish → alert` pipeline.
 
 ## Stack
 
@@ -82,10 +87,10 @@ backend's `CORS_ORIGINS` setting.
 │   ├── main.py           # FastAPI API routes (pure JSON API)
 │   ├── sources.py        # Source definitions
 │   ├── fetcher.py        # Fetching + normalization of upstream sources
-│   ├── pipeline.py       # Refresh orchestration: fetch → enrich → persist → …
+│   ├── pipeline.py       # Refresh orchestration: fetch → enrich → persist → index → publish → alert
 │   ├── enrich.py         # CISA KEV + EPSS enrichment
 │   ├── osv.py            # OSV.dev enrichment (affected/fixed/severity)
-│   ├── search.py         # Search backend (OpenSearch + SQLite fallback)
+│   ├── search.py         # Search backend (OpenSearch + SQL fallback)
 │   ├── ossf.py           # OpenSSF Malicious Packages GitHub-API source
 │   ├── store.py          # Storage facade/port (selects backend; ADR-0003)
 │   ├── sqlite_store.py   # SQLite storage adapter
@@ -100,14 +105,22 @@ backend's `CORS_ORIGINS` setting.
 │   ├── nginx.conf        # nginx config (serves the SPA, proxies /api)
 │   └── Dockerfile        # Frontend (nginx) image
 ├── tests/
-│   ├── test_feed.py      # Unit tests for feed logic
-│   ├── test_osv.py       # Unit tests for OSV enrichment
-│   ├── test_ossf.py      # Unit tests for OpenSSF source
-│   ├── test_alerts.py    # Unit tests for alert formatting
-│   └── test_store.py     # Unit tests for persistence
+│   ├── test_feed.py      # Feed normalization / dedup logic
+│   ├── test_osv.py       # OSV enrichment
+│   ├── test_ossf.py      # OpenSSF source
+│   ├── test_alerts.py    # Alert formatting
+│   ├── test_store.py     # SQLite persistence
+│   ├── test_search.py    # Search document mapping
+│   ├── test_config.py    # Settings
+│   ├── test_models.py    # Domain model + storage selection
+│   ├── test_api.py       # API surface (routes, CORS)
+│   └── test_pipeline.py  # Refresh pipeline
+├── docs/
+│   ├── architecture.md   # Architecture review (C4) + delivery record
+│   └── adr/              # Architecture Decision Records
 ├── deploy/
-│   └── k8s/              # Kubernetes manifests (Deployment, Service, PVC, ConfigMap)
-├── Dockerfile
+│   └── k8s/              # Kubernetes manifests (api, frontend, postgres, …)
+├── Dockerfile            # API image
 ├── docker-compose.yml
 ├── requirements.txt
 ├── README.md
@@ -117,7 +130,7 @@ backend's `CORS_ORIGINS` setting.
 ## Quickstart
 
 ```bash
-cd /home/ngeorger/feeder
+cd sredevopsorg-sec-feed
 
 # Install dependencies into ./.pip-packages
 python3 -m pip install --target ./.pip-packages -r requirements.txt
@@ -319,7 +332,7 @@ curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
 ## Tests
 
 ```bash
-cd /home/ngeorger/feeder
+cd sredevopsorg-sec-feed
 PYTHONPATH=./.pip-packages python3 -m pytest -q
 ```
 
@@ -336,3 +349,11 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 - [x] PostgreSQL primary store (SQLite fallback when `DATABASE_URL` unset)
 - [x] Distro patch-status normalization
 - [x] OpenSearch auto-sync improvements
+
+### Architecture (2025-09)
+
+- [x] Frontend/backend separated into `web` (nginx) + `api` (FastAPI) deployables
+- [x] Centralized configuration (`app/config.py` Settings)
+- [x] `Storage` port with SQLite + PostgreSQL adapters
+- [x] Extracted domain model (`app/models.py`)
+- [x] Refresh pipeline decomposed into an explicit orchestrator (`app/pipeline.py`)

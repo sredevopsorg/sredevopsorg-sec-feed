@@ -1,6 +1,6 @@
 # ADR-0004: Extract a domain model and decompose the refresh pipeline
 
-- Status: Accepted
+- Status: Accepted (implemented)
 - Date: 2025-09-05
 
 ## Context
@@ -15,9 +15,10 @@ pipeline is a single god coroutine (`refresh_feed`).
 ## Decision
 
 1. Move `FeedItem` and its serialization helpers (`item_to_dict`,
-   `_time_ago`, `_ensure_aware`, sample data, deduplication/sort) into a
-   dedicated `models` module so persistence and fetching depend on the model
-   one-way, breaking the `fetcher ↔ store` cycle.
+   `_time_ago`, `_ensure_aware`, `_hash_item`, `_tag_priority`, and sample
+   data) into a dedicated `models` module so persistence and fetching depend on
+   the model one-way, breaking the `fetcher ↔ store` cycle. (Deduplication and
+   sort remain in the fetch module as fetch-pipeline-local helpers.)
 2. Extract the refresh orchestration from `fetcher.py` into a small
    pipeline/orchestrator with one-way dependencies:
    `fetch → enrich → persist → index → publish → alert`. Each step stays
