@@ -8,7 +8,8 @@ services:
     ports:
       - "8000:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
   # Backend: pure JSON API (no UI assets).
@@ -36,6 +37,17 @@ services:
         condition: service_healthy
       postgres-init:
         condition: service_completed_successfully
+    # No curl in the slim image; probe /health with the stdlib only.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     restart: unless-stopped
 
   postgres:
