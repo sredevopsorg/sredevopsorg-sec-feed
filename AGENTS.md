@@ -11,22 +11,19 @@ advisories, CVEs, and threats for Linux, cloud, and Kubernetes.
 
 ## Commands
 
-Run these from the repository root.
+Run these from the repository root. Development and production are
+container-first (Docker/Podman); a host Python install is optional.
 
 ```bash
-# Install dependencies (vendored into ./.pip-packages)
-python3 -m pip install --target ./.pip-packages -r requirements.txt
-
-# Run the API (pure JSON API — the frontend is served separately)
-PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-# Run tests
-PYTHONPATH=./.pip-packages python3 -m pytest -q
-
-# Run with Docker/Podman
+# Development (hot reload via the auto-applied dev override)
 docker compose up --build
-# or
-podman-compose up --build
+
+# Run tests (host, or inside the dev container)
+pip install -r requirements-dev.txt
+pytest -q
+
+# Production (pinned, non-root images; dev override is not loaded with -f)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # Deploy to Kubernetes
 kubectl apply -k deploy/k8s
@@ -56,7 +53,11 @@ app/alerts.py      Discord / Slack / email / log alerts for urgent items
 frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step)
 tests/             Unit tests for feed, store, search, config, API, and pipeline
 docs/              Architecture review (docs/architecture.md) + ADRs (docs/adr/)
-deploy/k8s/        Kubernetes manifests (api, frontend, postgres, optional OpenSearch)
+deploy/k8s/        Kubernetes manifests (api, frontend, postgres, PDB, optional OpenSearch/Ingress)
+.devcontainer/     Dev Container (VS Code / Codespaces)
+docker-compose.override.yml  Dev overrides (hot reload, source mounts)
+docker-compose.prod.yml      Production overrides (pinned images)
+requirements-dev.txt         Test/dev dependencies
 ```
 
 ## Critical invariants
@@ -102,6 +103,10 @@ deploy/k8s/        Kubernetes manifests (api, frontend, postgres, optional OpenS
 11. `store.py` is the only storage API callers should use. When `DATABASE_URL`
     is set it delegates to `postgres_store.py`; otherwise it uses SQLite.
 12. Keep the SQLite path working. Local tests rely on it.
+13. **Production images run non-root.** The API image uses a non-root `app`
+    user (UID 10001) and the frontend uses `nginxinc/nginx-unprivileged`
+    (listens on 8080). Do not add `USER root` to production images; dev
+    containers may run as root.
 
 ## Feed item contract
 

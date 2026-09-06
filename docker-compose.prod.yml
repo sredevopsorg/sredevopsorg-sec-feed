@@ -1,0 +1,16 @@
+# Production overrides — pinned images, no source mounts, strict restart.
+# Run with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# (When `-f` is used, docker-compose.override.yml is NOT auto-loaded.)
+services:
+  web:
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web
+    restart: always
+
+  api:
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
+    restart: always
+
+  postgres:
+    image: docker.io/postgres:16-alpine
+    restart: always

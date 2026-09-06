@@ -1,0 +1,29 @@
+# Ingress exposing the frontend. Optional and OFF by default: uncomment
+# `- ingress.yaml` in kustomization.yaml and set a real host + TLS. Requires an
+# Ingress controller in the cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: security-feed-web
+  labels:
+    app: security-feed-web
+  annotations:
+    # ingressClassName is set by the cluster's controller (e.g. traefik/nginx).
+    # kubernetes.io/ingress.class: nginx
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: security-feed.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: security-feed-web
+                port:
+                  name: http
+  # tls:
+  #   - hosts:
+  #       - security-feed.example.com
+  #     secretName: security-feed-web-tls

@@ -119,35 +119,52 @@ backend's `CORS_ORIGINS` setting.
 │   ├── architecture.md   # Architecture review (C4) + delivery record
 │   └── adr/              # Architecture Decision Records
 ├── deploy/
-│   └── k8s/              # Kubernetes manifests (api, frontend, postgres, …)
-├── Dockerfile            # API image
-├── docker-compose.yml
-├── requirements.txt
+│   └── k8s/              # Kubernetes manifests (api, frontend, postgres, PDB, …)
+├── .devcontainer/        # Dev Container (VS Code / Codespaces)
+├── Dockerfile            # API image (non-root, production)
+├── docker-compose.yml    # Base services
+├── docker-compose.override.yml  # Dev overrides (hot reload, source mounts)
+├── docker-compose.prod.yml      # Production overrides (pinned images)
+├── requirements.txt      # Runtime dependencies (pinned)
+├── requirements-dev.txt  # Test/dev dependencies (pinned)
 ├── README.md
 └── AGENTS.md
 ```
 
-## Quickstart
+## Quickstart (container-first)
+
+Only Docker (or Podman) is required — no host Python setup.
+
+### Development
 
 ```bash
-cd sredevopsorg-sec-feed
-
-# Install dependencies into ./.pip-packages
-python3 -m pip install --target ./.pip-packages -r requirements.txt
-
-# Run the API (pure JSON API — no UI)
-PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+docker compose up --build
 ```
 
-Open <http://localhost:8000/api> for the API descriptor. The frontend is served
-separately — see the `web` service in `docker-compose.yml`, or serve
-`frontend/` with any static file server (it calls the API via the configured
-base URL).
+`docker compose` auto-applies `docker-compose.override.yml`, which mounts the
+source and runs `uvicorn --reload`, so code changes hot-reload. The UI is served
+at <http://localhost:8000>.
+
+Alternatively, open this repo in a **Dev Container** (VS Code or GitHub
+Codespaces) — see `.devcontainer/`.
+
+### Production
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+This runs the pinned, non-root images (`ghcr.io/...:web` and
+`ghcr.io/...:latest`) with no source mounts. (When `-f` is used, the dev
+override is not loaded.)
 
 > The first feed refresh runs in the background on startup. Subsequent requests
 > are served from the configured store and refresh every 10 minutes; the
 > browser updates via SSE (`/api/events`) and falls back to polling every 5
 > minutes.
+
+When `DATABASE_URL` is unset, the app uses SQLite (`./data/feed.db` locally, or
+the `feed-data` volume in containers).
 
 ### Frontend configuration
 
@@ -159,27 +176,14 @@ origin from `window.__API_BASE_URL__` (set in `frontend/config.js`):
 - Set it to an absolute URL (e.g. `"https://feed.example.com"`) to host the
   frontend separately from the API.
 
-### Local PostgreSQL
+### Run without containers (optional)
 
 ```bash
-# Without Docker, point the app at any PostgreSQL database:
-export DATABASE_URL=postgresql://feed:feed@localhost:5432/feed
-PYTHONPATH=./.pip-packages python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+pip install -r requirements-dev.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-When `DATABASE_URL` is unset, the app uses SQLite in `./data/feed.db`.
-
-### Docker / Podman
-
-```bash
-docker compose up --build
-# or, with rootless containers available:
-podman-compose up --build
-```
-
-`docker compose up` starts two application services: `web` (nginx serving the
-frontend on <http://localhost:8000>) and `api` (the FastAPI backend, internal
-only). The SQLite database is stored in the `feed-data` volume.
+This starts the API only (no UI); serve `frontend/` with any static file server.
 
 ### Alerting environment variables
 
@@ -197,8 +201,8 @@ Without any channel configured, urgent items are logged only.
 ### PostgreSQL + OpenSearch via Compose
 
 `docker compose up --build` starts the frontend (`web`), the API (`api`), and
-PostgreSQL. The API service uses
-`DATABASE_URL=postgresql://feed:feed@postgres:5432/feed`.
+PostgreSQL. By default the API uses SQLite; to use PostgreSQL, uncomment
+`DATABASE_URL=postgresql://feed:feed@postgres:5432/feed` in the `api` service.
 
 To add OpenSearch search, run:
 
@@ -244,13 +248,16 @@ Then open <http://localhost:8000>.
   Service `api` on port 8000). An init container waits for PostgreSQL before
   startup, and the API reads `DATABASE_URL` from the
   `security-feed-api-secrets` Secret.
-- `postgres` — PostgreSQL primary store (Deployment + `ReadWriteOnce` PVC +
-  ClusterIP Service). Credentials live in `security-feed-api-secrets`.
-- `security-feed-api-data` — `ReadWriteOnce` PVC kept as the SQLite fallback
-  when `DATABASE_URL` is unset.
+- `postgres` — PostgreSQL primary store (Deployment + PVC + ClusterIP Service).
+  Credentials live in `security-feed-api-secrets`.
+- `security-feed-api-data` — PVC kept as the SQLite fallback when `DATABASE_URL`
+  is unset.
 - `security-feed-api-config` — ConfigMap for `LOG_LEVEL`, optional `CORS_ORIGINS`,
   and optional alerting env vars. Put real Discord/Slack/email webhook values
   in a Secret in production rather than the ConfigMap.
+- PodDisruptionBudgets for the API, frontend, and PostgreSQL workloads.
+
+The API and frontend run as non-root and drop all Linux capabilities.
 
 **OpenSearch is optional and off by default.** To enable it, uncomment
 `opensearch.yaml` in `deploy/k8s/kustomization.yaml` and `OPENSEARCH_URL` in
