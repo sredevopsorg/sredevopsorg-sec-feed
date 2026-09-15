@@ -1,5 +1,5 @@
-# Frontend: static single-page app served by non-root nginx (listens on 8080),
-# reverse-proxying /api to the internal `api` Service.
+# Frontend: static single-page app served by non-root nginx (UID 101, port
+# 8080), reverse-proxying /api to the internal `api` Service.
 apiVersion: v1
 kind: Service
 metadata:
@@ -42,10 +42,10 @@ spec:
         component: web
     spec:
       securityContext:
-        # runAsNonRoot: true
-        # runAsUser: 101
-        # runAsGroup: 101
-        # fsGroup: 101
+        # The image is built for UID 101 and binds the unprivileged port 8080.
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -53,13 +53,13 @@ spec:
           image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web
           imagePullPolicy: Always
           ports:
-            - containerPort: 80
+            - containerPort: 8080
               name: http
           securityContext:
             allowPrivilegeEscalation: false
-            # capabilities:
-            #   drop:
-            #     - ALL
+            capabilities:
+              drop:
+                - ALL
           readinessProbe:
             httpGet:
               path: /
