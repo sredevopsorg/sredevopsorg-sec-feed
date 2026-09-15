@@ -15,14 +15,14 @@ Run these from the repository root. Development and production are
 container-first (Docker/Podman); a host Python install is optional.
 
 ```bash
-# Development (hot reload via the auto-applied dev override)
+# Development (builds the web + api images from source; UI on :8080, API on :8000)
 docker compose up --build
 
-# Run tests (host, or inside the dev container)
+# Run tests (host)
 pip install -r requirements-dev.txt
 pytest -q
 
-# Production (pinned, non-root images; dev override is not loaded with -f)
+# Production (pinned, non-root images)
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # Deploy to Kubernetes
@@ -54,8 +54,7 @@ frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step)
 tests/             Unit tests for feed, store, search, config, API, and pipeline
 docs/              Architecture review (docs/architecture.md) + ADRs (docs/adr/)
 deploy/k8s/        Kubernetes manifests (api, frontend, postgres, PDB, optional OpenSearch/Ingress)
-.devcontainer/     Dev Container (VS Code / Codespaces)
-docker-compose.override.yml  Dev overrides (hot reload, source mounts)
+docker-compose.yml           Base services (local build)
 docker-compose.prod.yml      Production overrides (pinned images)
 requirements-dev.txt         Test/dev dependencies
 ```
@@ -104,9 +103,8 @@ requirements-dev.txt         Test/dev dependencies
     is set it delegates to `postgres_store.py`; otherwise it uses SQLite.
 12. Keep the SQLite path working. Local tests rely on it.
 13. **Production images run non-root.** The API image uses a non-root `app`
-    user (UID 10001) and the frontend uses `nginxinc/nginx-unprivileged`
-    (listens on 8080). Do not add `USER root` to production images; dev
-    containers may run as root.
+    user (UID 10001) and the frontend image serves through nginx on port 8080.
+    Do not add `USER root` to production images.
 
 ## Feed item contract
 

@@ -1,6 +1,5 @@
-# Base services. For local development run `docker compose up` (the dev
-# override in docker-compose.override.yml is applied automatically). For
-# production run:
+# Base services. For local development run `docker compose up --build` (UI on
+# http://localhost:8080, API on http://localhost:8000). For production run:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 services:
   # Frontend: static single-page app served by non-root nginx, reverse-proxying

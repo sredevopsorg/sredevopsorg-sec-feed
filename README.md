@@ -120,11 +120,9 @@ backend's `CORS_ORIGINS` setting.
 │   └── adr/              # Architecture Decision Records
 ├── deploy/
 │   └── k8s/              # Kubernetes manifests (api, frontend, postgres, PDB, …)
-├── .devcontainer/        # Dev Container (VS Code / Codespaces)
 ├── Dockerfile            # API image (non-root, production)
-├── docker-compose.yml    # Base services
-├── docker-compose.override.yml  # Dev overrides (hot reload, source mounts)
-├── docker-compose.prod.yml      # Production overrides (pinned images)
+├── docker-compose.yml    # Base services (local build)
+├── docker-compose.prod.yml # Production overrides (pinned images)
 ├── requirements.txt      # Runtime dependencies (pinned)
 ├── requirements-dev.txt  # Test/dev dependencies (pinned)
 ├── README.md
@@ -141,12 +139,20 @@ Only Docker (or Podman) is required — no host Python setup.
 docker compose up --build
 ```
 
-`docker compose` auto-applies `docker-compose.override.yml`, which mounts the
-source and runs `uvicorn --reload`, so code changes hot-reload. The UI is served
-at <http://localhost:8000>.
+This builds the `web` (nginx) and `api` (FastAPI) images from source and starts
+them alongside PostgreSQL:
 
-Alternatively, open this repo in a **Dev Container** (VS Code or GitHub
-Codespaces) — see `.devcontainer/`.
+- UI — <http://localhost:8080>
+- API — <http://localhost:8000> (also reachable on the UI origin at `/api`,
+  which nginx reverse-proxies to the API container)
+
+The images are the same ones used in production, so there is no source mount and
+no hot reload: re-run `docker compose up --build` after changing code.
+
+For a faster edit/refresh loop, run the API on the host with `uvicorn --reload`
+(see [Run without containers](#run-without-containers-optional)) and serve
+`frontend/` with any static file server, pointing `window.__API_BASE_URL__` at
+<http://localhost:8000> (CORS defaults to `*`).
 
 ### Production
 
@@ -155,8 +161,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
 This runs the pinned, non-root images (`ghcr.io/...:web` and
-`ghcr.io/...:latest`) with no source mounts. (When `-f` is used, the dev
-override is not loaded.)
+`ghcr.io/...:latest`) with no source mounts.
 
 > The first feed refresh runs in the background on startup. Subsequent requests
 > are served from the configured store and refresh every 10 minutes; the
