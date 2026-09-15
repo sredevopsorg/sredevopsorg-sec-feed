@@ -22,7 +22,7 @@ docker compose up --build
 pip install -r requirements-dev.txt
 pytest -q
 
-# Production (pinned, non-root images)
+# Production (published, non-root images; run `docker compose pull` first)
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # Deploy to Kubernetes
@@ -36,6 +36,7 @@ readable.
 
 ```text
 app/config.py      Centralized Settings (environment-driven; ADR-0002)
+app/http_client.py Single outbound HTTP policy: shared user agent + bounded timeouts
 app/models.py      Domain model (FeedItem) + serialization (ADR-0004)
 app/main.py        FastAPI API routes and app startup (pure JSON API)
 app/sources.py     Source definitions (add new feeds here)
@@ -50,12 +51,16 @@ app/sqlite_store.py    SQLite storage adapter
 app/postgres_store.py  PostgreSQL storage adapter
 app/events.py      SSE pub/sub broker
 app/alerts.py      Discord / Slack / email / log alerts for urgent items
-frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step)
-tests/             Unit tests for feed, store, search, config, API, and pipeline
+frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step);
+                   Dockerfile + nginx.conf serve it as non-root nginx on 8080
+tests/             Unit tests: feed/enrichment, models, store, search, config, HTTP
+                   policy, API, pipeline, OSV/OSSF, alerts
 docs/              Architecture review (docs/architecture.md) + ADRs (docs/adr/)
-deploy/k8s/        Kubernetes manifests (api, frontend, postgres, PDB, optional OpenSearch/Ingress)
-docker-compose.yml           Base services (local build)
-docker-compose.prod.yml      Production overrides (pinned images)
+deploy/k8s/        Kubernetes manifests (api, frontend; postgres/PDB/Ingress/OpenSearch
+                   ship commented out of kustomization.yaml)
+.github/workflows/ CI (pytest on Python 3.13), CodeQL, container image builds
+docker-compose.yml           Base services (local build; UI host port 8080)
+docker-compose.prod.yml      Production overrides (published GHCR images)
 requirements-dev.txt         Test/dev dependencies
 ```
 
@@ -68,11 +73,14 @@ requirements-dev.txt         Test/dev dependencies
 2. **The feed must never render empty.** `fetcher.py` provides sample fallback
    data when all live sources fail. Preserve that behavior.
 3. **Never block the API on a slow source.** `pipeline.get_feed()` returns the
-   cached feed immediately and refreshes in the background.
+   cache immediately and schedules a single-flight background refresh
+   (`pipeline.schedule_refresh()`). No request path may await a refresh.
 4. **Sample rows must stay hidden once live rows exist.** `store.query_feed()`
    excludes `is_sample=1` when `is_sample=0` rows are present.
 5. **Respect source rate limits and terms.** All HTTP calls must keep the
-   current `USER_AGENT` and `HTTP_TIMEOUT`.
+   current `USER_AGENT` and a bounded timeout: build clients through
+   `app.http_client.client()`. `tests/test_http.py` fails if any other module
+   constructs an `httpx` client.
 6. **Keep tests passing.** Every change to parsing/enrichment should add or
    update a test in `tests/test_feed.py`.
 
@@ -103,8 +111,13 @@ requirements-dev.txt         Test/dev dependencies
     is set it delegates to `postgres_store.py`; otherwise it uses SQLite.
 12. Keep the SQLite path working. Local tests rely on it.
 13. **Production images run non-root.** The API image uses a non-root `app`
-    user (UID 10001) and the frontend image serves through nginx on port 8080.
-    Do not add `USER root` to production images.
+    user (UID 10001). The frontend image is `nginxinc/nginx-unprivileged`
+    running as UID 101 and listening on 8080; Compose publishes it on host 8080
+    and the Kubernetes Service exposes port 80. Do not add `USER root` to
+    production images, and keep the nginx listen port in step with the image.
+14. **The search index must match the SQL view.** Sample rows are never
+    indexed, and `search.sync_archive()` purges them as soon as live rows
+    exist, so `/api/search` cannot return rows the SQL paths hide.
 
 ## Feed item contract
 
@@ -114,31 +127,46 @@ Every item must be normalized to the `FeedItem` dataclass in
 - `id` — stable hash of URL + title
 - `title`, `summary`, `url`, `source`, `source_url`
 - `published` — timezone-aware UTC datetime or `None`
-- `tags` — subset of `linux`, `cloud`, `kubernetes`, `cve`, `exploit`,
-  `patch`, `threat`
+- `tags` — core set `linux`, `cloud`, `kubernetes`, `cve`, `exploit`,
+  `patch`, `threat`; KEV enrichment adds `kev`; the OpenSSF source adds
+  `malware`, `supply-chain`, `malicious-packages` and the lowercased ecosystem
+  (`go`, `npm`, …)
 - `cves` — list of uppercase CVE IDs, e.g. `["CVE-2024-21626"]`
 - `severity` — `critical` | `high` | `medium` | `low` | `unknown`
 - `urgent` — boolean, drives the red dot in the UI
 - `kev` — true when a CVE is in CISA's Known Exploited Vulnerabilities catalog
-- `epss_score` — FIRST EPSS score when available
+- `epss_score` — FIRST EPSS score when available; `None` when unknown (never
+  use `0.0` as a stand-in for "not scored")
+- `osv_affected`, `osv_fixed`, `osv_severity` — OSV.dev enrichment (best-effort,
+  capped per refresh)
 - `patch_status` — `fixed` | `affected` | `not-affected` | `deferred` | `unknown`
 - `is_sample` — true for fallback/sample rows
 
-The API returns these via `item_to_dict()`, which also computes `time_ago`.
+The API returns these via `item_to_dict()`, which also computes `time_ago` and
+emits `is_sample`.
 
 ## When changing the UI
 
 - Mirror the existing dark "Live Intelligence Feed" aesthetic: dark panels,
   orange accent, uppercase header, left time column, tag chips, red urgent dot,
-  `VIEW FULL LIVE FEED →` footer.
+  `VIEW FULL LIVE FEED →` footer. The footer toggles between the recent feed
+  (`/api/feed`) and the full archive (`/api/items`); keep both labels honest.
 - Keep it responsive (the current layout collapses on narrow screens).
 - Prefer server-provided `time_ago`; do not duplicate relative-time logic in
   JS unless there is a clear reason.
+- Filter server-side: pass `tag`/`q` as query parameters instead of filtering
+  the returned array in JS (the two views must not be able to disagree).
+- Render untrusted values through `escapeHtml()` and links through
+  `safeHref()`, which only allows http/https.
 
 ## Common pitfalls
 
 - **Timezone-naive datetimes** break sorting. Always use
-  `_ensure_aware()` before comparing `published`.
+  `_ensure_aware()` before comparing `published`; it converts aware values to
+  UTC, which the SQLite adapter needs because it orders rows by the stored ISO
+  string.
+- **Sample rows** must stay invisible once live rows exist (invariant 4), in
+  the store *and* in the OpenSearch index (invariant 14).
 - **HTML summaries** must be stripped/truncated with `_strip_html()` and
   `_truncate()` before rendering.
 - **NVD keyword queries** return oldest-first. Use the `totalResults` +
@@ -148,7 +176,9 @@ The API returns these via `item_to_dict()`, which also computes `time_ago`.
 
 ## Definition of done
 
-- [ ] Tests pass
+- [ ] `pip install -r requirements-dev.txt && pytest -q` is green
 - [ ] Server starts and `/health` returns `{"status":"ok"}`
-- [ ] `/api/feed` returns valid items (or sample fallback)
-- [ ] README/source table updated if sources changed
+- [ ] `/api/feed` returns valid items (or sample fallback) without waiting on a refresh
+- [ ] Frontend edits: `node --check frontend/app.js`, no new dependency, no `alert()` placeholders
+- [ ] README (sources table, API tables, item schema) and AGENTS.md updated when
+      behaviour, ports, invariants, or the item contract change

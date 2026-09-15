@@ -28,12 +28,15 @@ single `Storage` port backs SQLite/PostgreSQL adapters, the domain model is
 extracted, and the refresh runs as an explicit
 `fetch → enrich → persist → index → publish → alert` pipeline.
 
+A follow-up audit fixed the correctness, redundancy and deployment/doc drift
+found afterwards; those changes are listed under [Audit fixes](#audit-fixes-2025-09-one-pr-per-item).
+
 ## Stack
 
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.13, FastAPI, httpx, feedparser |
-| Frontend | Static HTML/CSS/JS in `frontend/`, served by nginx (no build step, no CDN) |
+| Frontend | Static HTML/CSS/JS in `frontend/`, served by non-root nginx (UID 101, port 8080) — no build step, no CDN |
 | Storage | PostgreSQL primary store, SQLite fallback, in-memory cache |
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
@@ -113,6 +116,7 @@ backend's `CORS_ORIGINS` setting.
 │   ├── test_search.py    # Search document mapping
 │   ├── test_config.py    # Settings
 │   ├── test_models.py    # Domain model + storage selection
+│   ├── test_http.py      # Outbound HTTP policy (user agent + timeouts)
 │   ├── test_api.py       # API surface (routes, CORS)
 │   └── test_pipeline.py  # Refresh pipeline
 ├── docs/
@@ -160,13 +164,18 @@ For a faster edit/refresh loop, run the API on the host with `uvicorn --reload`
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-This runs the pinned, non-root images (`ghcr.io/...:web` and
-`ghcr.io/...:latest`) with no source mounts.
+This pulls the published `ghcr.io/...:web` and `ghcr.io/...:latest` images and
+runs them non-root with no source mounts. Run
+`docker compose -f docker-compose.yml -f docker-compose.prod.yml pull` (or add
+`--no-build`) first, so Compose cannot fall back to building the base file's
+`build:` contexts. The tags are pinned to a channel rather than a digest — use
+an immutable tag or digest if you need bit-for-bit reproducibility.
 
-> The first feed refresh runs in the background on startup. Subsequent requests
-> are served from the configured store and refresh every 10 minutes; the
-> browser updates via SSE (`/api/events`) and falls back to polling every 5
-> minutes.
+> The first feed refresh runs in the background on startup (single-flight) and
+> never blocks a request: every request is answered from the configured store,
+> which is seeded with sample rows until live data arrives. The cache refreshes
+> every 10 minutes; the browser updates via SSE (`/api/events`) and falls back
+> to polling every 5 minutes.
 
 When `DATABASE_URL` is unset, the app uses SQLite (`./data/feed.db` locally, or
 the `feed-data` volume in containers).
@@ -222,14 +231,16 @@ environment. Without OpenSearch, `/api/search` falls back to SQL (Postgres
 When OpenSearch is enabled, the app creates the index with an explicit mapping
 on startup and keeps it in sync with the archive automatically (incremental
 indexing per refresh plus a throttled full reconcile) — all best-effort, so an
-unavailable OpenSearch never breaks the feed.
+unavailable OpenSearch never breaks the feed. Sample/fallback rows are never
+indexed, and any sample document left over from an earlier offline boot is
+purged once live rows exist, so search matches the SQL behaviour exactly.
 
 ### Kubernetes quickstart
 
 Requires `kubectl` and access to a cluster (Kustomize is built into `kubectl`).
 
 ```bash
-# Deploy the app, PostgreSQL (primary store), ConfigMap, Secret, and PVCs
+# Deploy the API, the frontend, the ConfigMap/Secret, and the SQLite PVC
 kubectl apply -k deploy/k8s
 
 # Watch the pods become ready (frontend `web` and API `api` pods)
@@ -245,29 +256,35 @@ kubectl port-forward svc/security-feed-web 8000:80
 
 Then open <http://localhost:8000>.
 
-**What gets deployed** by `kubectl apply -k deploy/k8s`:
+**What gets deployed by default** (`deploy/k8s/kustomization.yaml`):
 
-- `security-feed-web` — the frontend (nginx Deployment + ClusterIP Service on
-  port 80). It reverse-proxies `/api` to the internal `api` Service.
-- `security-feed-api` — the backend API (Deployment + internal ClusterIP
-  Service `api` on port 8000). An init container waits for PostgreSQL before
-  startup, and the API reads `DATABASE_URL` from the
-  `security-feed-api-secrets` Secret.
-- `postgres` — PostgreSQL primary store (Deployment + PVC + ClusterIP Service).
-  Credentials live in `security-feed-api-secrets`.
-- `security-feed-api-data` — PVC kept as the SQLite fallback when `DATABASE_URL`
-  is unset.
-- `security-feed-api-config` — ConfigMap for `LOG_LEVEL`, optional `CORS_ORIGINS`,
-  and optional alerting env vars. Put real Discord/Slack/email webhook values
-  in a Secret in production rather than the ConfigMap.
-- PodDisruptionBudgets for the API, frontend, and PostgreSQL workloads.
+- `security-feed-api` — the backend (Deployment + internal ClusterIP Service
+  `api` on port 8000). It runs as UID 10001 and sets `SECURITY_FEED_DB`
+  (`/app/data/feed.db`), so **the default store is SQLite** on the
+  `security-feed-api-data` PVC.
+- `security-feed-web` — the frontend (`nginxinc/nginx-unprivileged` Deployment
+  running as UID 101 on port 8080 + ClusterIP Service on port 80). It
+  reverse-proxies `/api` to the internal `api` Service, and the pod is
+  `runAsNonRoot` with all capabilities dropped, like the API pod.
+- `security-feed-api-config` — ConfigMap for `LOG_LEVEL`, optional
+  `CORS_ORIGINS`, and optional alerting env vars. Put real Discord/Slack/email
+  webhook values in a Secret in production rather than the ConfigMap.
+- `security-feed-api-secrets` — Secret with Postgres credentials and
+  `DATABASE_URL` (only consumed when you enable PostgreSQL, below).
 
-The API and frontend run as non-root and drop all Linux capabilities.
+**Optional components are shipped but commented out** of
+`deploy/k8s/kustomization.yaml`. Enable them deliberately:
 
-**OpenSearch is optional and off by default.** To enable it, uncomment
-`opensearch.yaml` in `deploy/k8s/kustomization.yaml` and `OPENSEARCH_URL` in
-`deploy/k8s/configmap.yaml`. Without it, `/api/search` falls back to SQL
-(Postgres `ILIKE`), so search works without any extra infrastructure.
+| Component | How to enable | Notes |
+|---|---|---|
+| PostgreSQL | Uncomment `- postgres.yaml` in `kustomization.yaml`, uncomment the `DATABASE_URL` env in `deployment.yaml`, and uncomment the `wait-for-postgres` init container next to it | Credentials come from `security-feed-api-secrets`; the PVC is `ReadWriteOnce` |
+| PodDisruptionBudgets | Uncomment `- pdb.yaml` | `minAvailable: 1` with `replicas: 1` blocks node drains, so raise the API/web replicas to at least 2 first |
+| Ingress | Uncomment `- ingress.yaml` and set a real host + TLS | Needs an Ingress controller; the sample host is `security-feed.example.com` |
+| OpenSearch | Uncomment `- opensearch.yaml` and `OPENSEARCH_URL` in `configmap.yaml` | Without it, `/api/search` falls back to SQL (Postgres `ILIKE`), so search needs no extra infrastructure |
+
+The `security-feed-api-data` PVC uses the cluster's default StorageClass.
+Set `storageClassName` in `deploy/k8s/pvc.yaml` if your cluster requires an
+explicit class (the manifests were previously hardcoded to `longhorn-rwx`).
 
 ## API
 
@@ -276,7 +293,7 @@ The API and frontend run as non-root and drop all Linux capabilities.
 | `GET` | `/api` | API descriptor (name, version, endpoints) |
 | `GET` | `/api/feed` | Normalized feed JSON |
 | `GET` | `/api/items` | Search/filter the persistent archive |
-| `GET` | `/api/search?q=...` | Full-text search (OpenSearch or SQLite) |
+| `GET` | `/api/search?q=...` | Full-text search (OpenSearch when configured, otherwise SQL — Postgres `ILIKE` or SQLite `LIKE`) |
 | `GET` | `/api/stats` | Counts by severity/tag |
 | `GET` | `/api/events` | Server-Sent Events stream |
 | `GET` | `/api/sources` | Configured sources |
@@ -297,6 +314,29 @@ Example:
 ```bash
 curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
 ```
+
+### `/api/items`
+
+Same filters as `/api/feed`, but reads the whole persistent archive instead of
+the live cache (default `limit` 100, max 1000).
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `tag` | string | — | Filter by one tag |
+| `severity` | string | — | Filter by severity |
+| `limit` | int | `100` | Max items (1–1000) |
+
+### `/api/search`
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `q` | string | `""` | Free-text query over title, summary, source and CVE ids |
+| `tag` | string | — | Filter by one tag |
+| `severity` | string | — | Filter by severity |
+| `limit` | int | `50` | Max items (1–200) |
+
+The response adds `backend` (`opensearch` or `sql`) so callers can tell which
+engine answered.
 
 ### Feed item schema
 
@@ -319,19 +359,29 @@ curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
   "osv_affected": ["Go:runc"],
   "osv_fixed": ["1.1.12"],
   "osv_severity": "high",
-  "patch_status": "fixed"
+  "patch_status": "fixed",
+  "is_sample": false
 }
 ```
 
+`epss_score` is `null` when EPSS is unavailable or has no score for the item's
+CVEs, and `is_sample` is `true` only for the fallback rows the server serves
+while no live source is reachable.
+
 ## Tagging and prioritization
 
-- **Tags** are inferred from source scope plus title/summary keywords:
-  `linux`, `cloud`, `kubernetes`, `cve`, `exploit`, `patch`, `threat`.
+- **Tags** are inferred from source scope plus title/summary keywords. The
+  core set is `linux`, `cloud`, `kubernetes`, `cve`, `exploit`, `patch`,
+  `threat`; enrichment adds `kev` for CISA KEV hits, and the OpenSSF source adds
+  `malware`, `supply-chain`, `malicious-packages` plus the affected ecosystem
+  (`go`, `npm`, …, lowercased).
 - **Severity** comes from CVSS when available, otherwise from textual heuristics.
 - **Urgent** items are critical/high-severity and exploitation-related; they
   render the red dot in the UI.
 - **KEV** items are in CISA's Known Exploited Vulnerabilities catalog.
-- **EPSS** is fetched from FIRST when CVEs are present (best-effort).
+- **EPSS** is fetched from FIRST when CVEs are present (best-effort, first
+  100 unique CVEs per refresh). `epss_score` is `null` when the score is
+  unknown; `0.0` always means a real, known zero.
 - **OSV.dev** adds affected packages, fixed versions, and severity for CVEs
   (best-effort, capped per refresh).
 - **Patch status** (`fixed` | `affected` | `not-affected` | `deferred` |
@@ -344,9 +394,13 @@ curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
 ## Tests
 
 ```bash
-cd sredevopsorg-sec-feed
-PYTHONPATH=./.pip-packages python3 -m pytest -q
+pip install -r requirements-dev.txt
+pytest -q
 ```
+
+CI runs the same command on Python 3.13 (`.github/workflows/ci.yaml`). The
+frontend has no build step or test runner; `node --check frontend/app.js` is the
+syntax check used when editing it.
 
 ## Roadmap
 
@@ -369,3 +423,22 @@ PYTHONPATH=./.pip-packages python3 -m pytest -q
 - [x] `Storage` port with SQLite + PostgreSQL adapters
 - [x] Extracted domain model (`app/models.py`)
 - [x] Refresh pipeline decomposed into an explicit orchestrator (`app/pipeline.py`)
+
+### Audit fixes (2025-09, one PR per item)
+
+- [x] EPSS "unknown" reported as `null` instead of `0.0` (#15)
+- [x] OSSF CVE ids normalized to uppercase via the shared extractor (#16)
+- [x] All timestamps normalized to UTC so text-ordered queries are correct (#17)
+- [x] `/api/feed` never blocks on a refresh; refresh is single-flight (#18)
+- [x] `is_sample` exposed in the item contract (#19)
+- [x] OpenSearch purges sample documents once live rows exist (#20)
+- [x] Frontend: real footer archive toggle, source/sample notices, LIVE/OFFLINE pill, legible chips (#21)
+- [x] nginx keeps security headers and stops caching `config.js` (#22)
+- [x] One outbound HTTP policy (shared user agent + bounded timeouts) (#23)
+- [x] Dead code, redundant guards and unused imports removed (#24)
+- [x] Frontend image is genuinely non-root on port 8080; compose/k8s aligned (#25)
+- [x] Documentation synced with the code (this PR)
+
+Still deferred (not blocking): typed API response models (Pydantic), a shared
+row-mapping/sample-hiding helper for the two storage adapters instead of
+mirrored implementations, and a linter/formatter.
