@@ -75,6 +75,16 @@ body {
   padding: 7px 11px;
   border-radius: 999px;
 }
+.live-pill.offline {
+  color: var(--text-faint);
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+.live-pill.offline .live-dot {
+  background: var(--text-faint);
+  box-shadow: none;
+  animation: none;
+}
 .live-dot {
   width: 7px;
   height: 7px;
@@ -222,7 +232,11 @@ body {
   padding: 4px 9px;
   border-radius: 6px;
   text-transform: uppercase;
-  border: 1px solid transparent;
+  /* Fallback colour so tags without a dedicated rule (malware, supply-chain,
+     ecosystem names) stay legible. */
+  background: var(--chip-bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
 }
 .chip-cve { background: rgba(255, 122, 61, 0.10); color: #ff8a50; border-color: rgba(255, 122, 61, 0.25); }
 .chip-linux { background: rgba(94, 220, 146, 0.09); color: #5edc92; border-color: rgba(94, 220, 146, 0.22); }
@@ -232,6 +246,8 @@ body {
 .chip-kev { background: rgba(255, 59, 48, 0.16); color: #ff8a80; border-color: rgba(255, 59, 48, 0.45); }
 .chip-patch { background: rgba(191, 160, 88, 0.10); color: #d5b56a; border-color: rgba(191, 160, 88, 0.25); }
 .chip-threat { background: rgba(186, 104, 200, 0.10); color: #ce93d8; border-color: rgba(186, 104, 200, 0.26); }
+.chip-malware { background: rgba(255, 59, 48, 0.12); color: #ff8a80; border-color: rgba(255, 59, 48, 0.32); }
+.chip-supply-chain, .chip-malicious-packages { background: rgba(186, 104, 200, 0.12); color: #ce93d8; border-color: rgba(186, 104, 200, 0.32); }
 .chip-severity-critical { background: rgba(255, 59, 48, 0.14); color: #ff8a80; border-color: rgba(255, 59, 48, 0.4); }
 .chip-severity-high { background: rgba(255, 149, 0, 0.10); color: #ffb74d; border-color: rgba(255, 149, 0, 0.3); }
 .chip-severity-medium { background: rgba(255, 213, 79, 0.10); color: #ffd54f; border-color: rgba(255, 213, 79, 0.25); }
@@ -277,6 +293,16 @@ body {
   text-align: center;
   color: var(--text-faint);
   font-size: 0.85rem;
+}
+.notice-note {
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .error-note {
   padding: 12px 22px;
