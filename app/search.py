@@ -19,6 +19,7 @@ never breaks the feed or the SQL fallback.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -114,7 +115,7 @@ async def _bulk(docs: list[dict[str, Any]]) -> int:
     bulk_lines: list[str] = []
     for doc in docs:
         bulk_lines.append(f'{{"index": {{"_index": "{INDEX_NAME}", "_id": "{doc["id"]}"}}}}')
-        bulk_lines.append(json_dumps(doc))
+        bulk_lines.append(json.dumps(doc, default=str))
     payload = "\n".join(bulk_lines) + "\n"
     async with http_client.client(timeout=SEARCH_TIMEOUT) as client:
         resp = await client.post(
@@ -138,6 +139,28 @@ async def index_items(items: list[FeedItem]) -> int:
         return 0
 
 
+def _needs_sample_purge(items: list[dict[str, Any]]) -> bool:
+    """True when the archive holds live rows, so indexed samples must go.
+
+    The store only returns fallback/sample rows while no live row exists
+    (invariant 4), so any live row in the result means the index must not
+    keep serving sample documents that the SQL path already hides.
+    """
+    return any(not item.get("is_sample") for item in items)
+
+
+async def _delete_sample_docs() -> int:
+    """Delete fallback/sample documents from the index (best effort)."""
+    async with http_client.client(timeout=SEARCH_TIMEOUT) as client:
+        resp = await client.post(
+            f"{OPENSEARCH_URL.rstrip('/')}/{INDEX_NAME}/_delete_by_query",
+            params={"refresh": "true"},
+            json={"query": {"term": {"is_sample": True}}},
+        )
+        resp.raise_for_status()
+        return int(resp.json().get("deleted") or 0)
+
+
 async def sync_archive(limit: int = 10000) -> int:
     """Backfill/reconcile the index from the persistent archive."""
     if not OPENSEARCH_URL:
@@ -149,10 +172,18 @@ async def sync_archive(limit: int = 10000) -> int:
         return 0
     docs = [{k: v for k, v in item.items() if k != "time_ago"} for item in items]
     try:
-        return await _bulk(docs)
+        indexed = await _bulk(docs)
     except Exception:
         logger.warning("OpenSearch archive sync failed; continuing")
         return 0
+    if _needs_sample_purge(items):
+        try:
+            deleted = await _delete_sample_docs()
+            if deleted:
+                logger.info("Purged %d sample document(s) from the index", deleted)
+        except Exception:
+            logger.warning("Could not purge sample documents from the index")
+    return indexed
 
 
 async def maybe_sync_archive(force: bool = False) -> int:
@@ -204,8 +235,3 @@ async def _search_opensearch(q: str, tag: str | None, severity: str | None, limi
     items = [_hit_to_item(h.get("_source", {})) for h in hits]
     return {"backend": "opensearch", "count": len(items), "items": items}
 
-
-def json_dumps(value: Any) -> str:
-    import json
-
-    return json.dumps(value, default=str)
