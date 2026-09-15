@@ -29,7 +29,6 @@ CACHE_TTL = 600  # seconds
 
 @dataclass
 class FeedCache:
-    items: list[FeedItem] = field(default_factory=list)
     fetched_at: datetime | None = None
     generated_at: datetime | None = None
     errors: list[str] = field(default_factory=list)
@@ -37,6 +36,36 @@ class FeedCache:
 
 CACHE = FeedCache()
 CACHE_LOCK = asyncio.Lock()
+_REFRESH_TASK: asyncio.Task | None = None
+
+
+def refresh_in_flight() -> bool:
+    """True while a background refresh is running."""
+    return _REFRESH_TASK is not None and not _REFRESH_TASK.done()
+
+
+def _on_refresh_done(task: asyncio.Task) -> None:
+    global _REFRESH_TASK
+    if _REFRESH_TASK is task:
+        _REFRESH_TASK = None
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Feed refresh failed: %r", exc)
+
+
+def schedule_refresh() -> bool:
+    """Start a refresh unless one is already running (single-flight).
+
+    Returns True when this call scheduled a new refresh.
+    """
+    global _REFRESH_TASK
+    if refresh_in_flight():
+        return False
+    _REFRESH_TASK = asyncio.create_task(refresh_feed())
+    _REFRESH_TASK.add_done_callback(_on_refresh_done)
+    return True
 
 
 async def _enrich(items: list[FeedItem]) -> list[FeedItem]:
@@ -88,7 +117,7 @@ async def refresh_feed() -> list[FeedItem]:
         items = await _enrich(items)
 
         now = datetime.now(timezone.utc)
-        CACHE = FeedCache(items=items, fetched_at=now, generated_at=now, errors=errors)
+        CACHE = FeedCache(fetched_at=now, generated_at=now, errors=errors)
 
         # Each downstream step is best-effort: a failure never breaks the feed.
         try:
@@ -111,14 +140,16 @@ async def refresh_feed() -> list[FeedItem]:
         except Exception:
             logger.exception("Alerting failed")
 
-        return CACHE.items
+        return items
 
 
-async def get_feed(limit: int = 50) -> FeedCache:
-    """Return a cached feed. Refresh synchronously if this is the first call."""
-    if CACHE.generated_at is None:
-        await refresh_feed()
+async def get_feed() -> FeedCache:
+    """Return the cached feed immediately, scheduling a refresh when stale.
+
+    This never awaits a refresh: a request must not be blocked by slow or
+    unreachable upstream sources (the API always answers from the store). The
+    refresh itself runs single-flight in the background.
+    """
     if CACHE.fetched_at is None or (datetime.now(timezone.utc) - CACHE.fetched_at).total_seconds() > CACHE_TTL:
-        # Best-effort background refresh; do not block the response.
-        asyncio.create_task(refresh_feed())
+        schedule_refresh()
     return CACHE
