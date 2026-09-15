@@ -3,7 +3,10 @@ name: CI
 on:
   pull_request:
     branches: [main]
-    
+  # Validate main itself: a pull request whose base branch was already merged
+  # can otherwise land on a dead branch and never reach main.
+  push:
+    branches: [main]
 
 permissions:
   # Global permissions for the workflow, which can be overridden at the job level

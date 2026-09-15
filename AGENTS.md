@@ -32,6 +32,17 @@ kubectl apply -k deploy/k8s
 There is no linter or formatter configured yet. Keep code PEP 8-ish and
 readable.
 
+## Pull requests
+
+- Target `main`. CI runs on pull requests and on pushes to `main`; both must
+  be green.
+- A stacked PR (base = another feature branch) keeps a reviewable diff, but
+  it must be retargeted to `main` as soon as its base merges. Merging it into
+  an already-merged base leaves the commit on a dead branch: `main` never
+  receives it and its tests never run there.
+- Check `gh pr view <n> --json baseRefName` before merging a PR that was
+  stacked on another branch.
+
 ## Repository layout
 
 ```text
