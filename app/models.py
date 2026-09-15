@@ -98,6 +98,7 @@ def item_to_dict(item: FeedItem, now: datetime | None = None) -> dict[str, Any]:
         "osv_fixed": getattr(item, "osv_fixed", []),
         "osv_severity": getattr(item, "osv_severity", None),
         "patch_status": getattr(item, "patch_status", "unknown"),
+        "is_sample": bool(item.is_sample),
     }
 
 
