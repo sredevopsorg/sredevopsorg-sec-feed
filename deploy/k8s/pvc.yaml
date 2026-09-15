@@ -5,9 +5,12 @@ metadata:
   labels:
     app: security-feed-api
 spec:
+  # ReadWriteOnce: the API runs one replica and SQLite is single-writer.
+  # Uncomment storageClassName below when the cluster requires an explicit
+  # class instead of its default.
   accessModes:
-    - ReadWriteMany
-  storageClassName: "longhorn-rwx"
+    - ReadWriteOnce
+  # storageClassName: standard
   resources:
     requests:
       storage: 1Gi
