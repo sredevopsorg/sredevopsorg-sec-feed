@@ -20,6 +20,7 @@ from typing import Any
 import feedparser
 import httpx
 
+from . import http_client
 from .models import (
     FeedItem,
     _ensure_aware,
@@ -98,8 +99,10 @@ def _is_relevant(source: Source, text: str) -> bool:
         return True
     return True
 
-HTTP_TIMEOUT = 8.0
-USER_AGENT = "security-live-feed-mvp/0.1 (+contact: security-team@example.com)"
+# Re-exported for callers that still import them from here; the single
+# outbound HTTP policy lives in app/http_client.py.
+HTTP_TIMEOUT = http_client.HTTP_TIMEOUT
+USER_AGENT = http_client.USER_AGENT
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "unknown": 0}
 
@@ -442,7 +445,7 @@ async def _fetch_source(source: Source) -> list[FeedItem]:
 
         items, _ = await ossf.fetch_recent_reports()
         return items[: source.max_items]
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
+    async with http_client.client() as client:
         if source.kind == "rss":
             return await _fetch_rss(source, client)
         if source.kind == "nvd":

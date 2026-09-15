@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from . import http_client
 from .fetcher import FeedItem, _ensure_aware
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ async def fetch_osv(cves: list[str], max_cves: int = MAX_CVES_PER_RUN) -> dict[s
     if not cves:
         return {}
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
-    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+    async with http_client.client() as client:
 
         async def guarded(cve: str) -> tuple[str, dict[str, Any] | None]:
             async with sem:
