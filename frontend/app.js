@@ -3,21 +3,42 @@
 
 (function () {
   const API_BASE = (window.__API_BASE_URL__ || "").replace(/\/+$/, "");
+  const RECENT_LIMIT = 60;
+  const ARCHIVE_LIMIT = 200;
 
   function api(path) {
     return API_BASE + path;
   }
 
-  const state = { items: [], tag: "", q: "", lastSeen: new Set() };
+  // mode: "recent" reads /api/feed (latest live refresh); "archive" reads
+  // /api/items (the full persisted archive).
+  const state = { items: [], tag: "", q: "", mode: "recent" };
 
   const $feed = document.getElementById("feed");
   const $count = document.getElementById("feedCount");
   const $errorNote = document.getElementById("errorNote");
+  const $sampleNote = document.getElementById("sampleNote");
+  const $livePill = document.getElementById("livePill");
+  const $liveLabel = document.getElementById("liveLabel");
+  const $fullFeedLink = document.getElementById("fullFeedLink");
+  const $fullFeedLabel = document.getElementById("fullFeedLabel");
 
   function escapeHtml(value) {
     const div = document.createElement("div");
     div.textContent = value ?? "";
     return div.innerHTML;
+  }
+
+  // Only http(s) URLs become anchors; anything else (javascript:, data:, …)
+  // is rendered as plain text.
+  function safeHref(value) {
+    if (!value) return "";
+    try {
+      const url = new URL(value, window.location.origin);
+      return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+    } catch (_) {
+      return "";
+    }
   }
 
   function chipClass(tag) {
@@ -41,8 +62,9 @@
     }
 
     const cveList = (item.cves || []).map(c => `<span class="chip chip-cve">${escapeHtml(c)}</span>`).join("");
-    const title = item.url
-      ? `<a class="row-title" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a>`
+    const href = safeHref(item.url);
+    const title = href
+      ? `<a class="row-title" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a>`
       : `<span class="row-title">${escapeHtml(item.title)}</span>`;
 
     return `
@@ -59,7 +81,9 @@
   }
 
   function render() {
-    const items = state.items.filter(i => !state.tag || (i.tags || []).includes(state.tag));
+    // Filtering happens server-side (tag/search query params); render what the
+    // API returned so the two views can never disagree.
+    const items = state.items;
     $count.textContent = `${items.length} item${items.length === 1 ? "" : "s"}`;
     if (!items.length) {
       $feed.innerHTML = `<div class="empty">No matching advisories right now.</div>`;
@@ -68,27 +92,61 @@
     $feed.innerHTML = items.map(renderRow).join("");
   }
 
+  function setLive(isLive) {
+    $livePill.classList.toggle("offline", !isLive);
+    $liveLabel.textContent = isLive ? "LIVE" : "OFFLINE";
+    $livePill.title = isLive
+      ? "Connected to the live feed"
+      : "Feed unavailable — retrying";
+  }
+
+  function showSourceErrors(errors) {
+    // Only /api/feed reports live-source errors; search/archive responses
+    // leave the note untouched instead of clearing it with a stale message.
+    if (!errors) return;
+    if (errors.length) {
+      $errorNote.hidden = false;
+      $errorNote.textContent = "Some live sources are unreachable from this environment; showing cached data. " +
+        errors.slice(0, 3).join(" · ");
+    } else {
+      $errorNote.hidden = true;
+    }
+  }
+
+  function showSampleNote(items) {
+    const sampleOnly = items.length > 0 && items.every(item => item.is_sample);
+    $sampleNote.hidden = !sampleOnly;
+    if (sampleOnly) {
+      $sampleNote.textContent = "No live source is reachable right now — showing sample data.";
+    }
+  }
+
+  function updateFooter() {
+    const archive = state.mode === "archive";
+    $fullFeedLabel.textContent = archive ? "Back to recent advisories" : "View full live feed";
+    $fullFeedLink.title = archive
+      ? "Show the most recent advisories"
+      : "Open the full searchable archive";
+  }
+
   async function loadFeed() {
     try {
-      const endpoint = state.q ? api("/api/search") : api("/api/feed");
+      const archive = state.mode === "archive";
+      const endpoint = state.q ? api("/api/search") : api(archive ? "/api/items" : "/api/feed");
       const url = new URL(endpoint, window.location.origin);
-      url.searchParams.set("limit", "60");
+      url.searchParams.set("limit", String(archive ? ARCHIVE_LIMIT : RECENT_LIMIT));
       if (state.q) url.searchParams.set("q", state.q);
       if (state.tag) url.searchParams.set("tag", state.tag);
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       state.items = data.items || [];
-
-      if (data.source_errors && data.source_errors.length) {
-        $errorNote.hidden = false;
-        $errorNote.textContent = "Some live sources are unreachable from this environment; showing cached/sample data. " +
-          data.source_errors.slice(0, 3).join(" · ");
-      } else {
-        $errorNote.hidden = true;
-      }
+      showSourceErrors(data.source_errors);
+      showSampleNote(state.items);
+      setLive(true);
       render();
     } catch (err) {
+      setLive(false);
       $errorNote.hidden = false;
       $errorNote.textContent = `Feed unavailable: ${err.message}. Retrying…`;
     }
@@ -113,16 +171,16 @@
     loadFeed();
   });
 
-  document.getElementById("fullFeedLink").addEventListener("click", (event) => {
+  $fullFeedLink.addEventListener("click", (event) => {
     event.preventDefault();
-    const params = new URLSearchParams();
-    if (state.tag) params.set("tag", state.tag);
-    const qs = params.toString();
-    alert("Full live feed would open the complete searchable archive" + (qs ? ` filtered by: ${state.tag}` : "") + ".");
+    state.mode = state.mode === "archive" ? "recent" : "archive";
+    updateFooter();
+    loadFeed();
   });
 
   function connectEvents() {
     const es = new EventSource(api('/api/events'));
+    es.onopen = () => setLive(true);
     es.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
@@ -134,9 +192,11 @@
     es.onerror = () => {
       // EventSource reconnects automatically; fallback polling below handles
       // environments where SSE is not available.
+      setLive(false);
     };
   }
 
+  updateFooter();
   loadFeed();
   connectEvents();
   setInterval(loadFeed, 5 * 60 * 1000); // fallback poll every 5 minutes

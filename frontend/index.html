@@ -16,7 +16,7 @@
         <div class="masthead-title">Live Intelligence Feed</div>
         <div class="masthead-sub">Linux · Cloud · Kubernetes Security</div>
       </div>
-      <div class="live-pill"><span class="live-dot"></span>LIVE</div>
+      <div class="live-pill" id="livePill" title="Connected to the live feed"><span class="live-dot"></span><span id="liveLabel">LIVE</span></div>
     </header>
 
     <div class="search-row">
@@ -37,9 +37,10 @@
         <span class="count" id="feedCount">—</span>
       </div>
       <div id="errorNote" class="error-note" hidden></div>
+      <div id="sampleNote" class="notice-note" hidden></div>
       <div id="feed"></div>
       <div class="panel-foot">
-        <a href="#" id="fullFeedLink">View full live feed <span class="arrow">→</span></a>
+        <a href="#" id="fullFeedLink" title="Open the full searchable archive"><span id="fullFeedLabel">View full live feed</span> <span class="arrow">→</span></a>
       </div>
     </section>
   </div>
