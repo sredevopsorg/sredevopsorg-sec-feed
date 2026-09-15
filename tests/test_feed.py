@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.fetcher import (
@@ -112,3 +114,91 @@ def test_patch_status_from_text():
     assert _patch_status_from_text(ubuntu, "CVE-2024-0001 ... Ubuntu is not affected") == "not-affected"
     # Non-distro sources stay unknown.
     assert _patch_status_from_text(k8s, "Kubernetes security advisory") == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Enrichment (KEV + EPSS)
+# ---------------------------------------------------------------------------
+
+def _enrichment_item(cves: list[str]) -> FeedItem:
+    return FeedItem(
+        id="e",
+        title="t",
+        summary="s",
+        url="u",
+        source="src",
+        source_url="su",
+        published=None,
+        cves=cves,
+        severity="high",
+    )
+
+
+def _enriched(monkeypatch, item: FeedItem, *, kev=None, epss=None) -> FeedItem:
+    from app import enrich as enrich_module
+
+    async def fake_kev():
+        return kev or {}
+
+    async def fake_epss(cves):
+        return epss or {}
+
+    monkeypatch.setattr(enrich_module, "_fetch_kev", fake_kev)
+    monkeypatch.setattr(enrich_module, "_fetch_epss", fake_epss)
+    return asyncio.run(enrich_module.enrich_items([item]))[0]
+
+
+def test_epss_unknown_score_stays_none(monkeypatch):
+    # Unavailable EPSS or an unscored CVE means "unknown", never 0.0.
+    assert _enriched(monkeypatch, _enrichment_item(["CVE-2024-0001"])).epss_score is None
+    other_cve = _enriched(monkeypatch, _enrichment_item(["CVE-2024-0001"]), epss={"CVE-2024-0002": 0.42})
+    assert other_cve.epss_score is None
+
+
+def test_epss_zero_score_is_kept(monkeypatch):
+    item = _enriched(monkeypatch, _enrichment_item(["CVE-2024-0001"]), epss={"CVE-2024-0001": 0.0})
+    assert item.epss_score == 0.0
+    assert item.urgent is False
+
+
+def test_epss_high_score_marks_urgent(monkeypatch):
+    item = _enriched(monkeypatch, _enrichment_item(["CVE-2024-0001"]), epss={"CVE-2024-0001": 0.62})
+    assert item.epss_score == 0.62
+    assert item.urgent is True
+
+
+def test_kev_marks_urgent_and_tags(monkeypatch):
+    item = _enriched(monkeypatch, _enrichment_item(["CVE-2024-0001"]), kev={"CVE-2024-0001": {}})
+    assert item.kev is True
+    assert item.urgent is True
+    assert {"kev", "exploit"} <= item.tags
+
+
+def test_epss_request_is_capped_not_chunked(monkeypatch):
+    from app import enrich as enrich_module
+
+    captured: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": []}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, params=None):
+            captured["params"] = params
+            return FakeResponse()
+
+    monkeypatch.setattr(enrich_module.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    over_cap = [f"CVE-2024-{i:04d}" for i in range(enrich_module.EPSS_MAX_CVES + 25)]
+
+    assert asyncio.run(enrich_module._fetch_epss(over_cap)) == {}
+    assert captured["params"]["cve"].count(",") == enrich_module.EPSS_MAX_CVES - 1

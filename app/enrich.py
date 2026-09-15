@@ -22,7 +22,9 @@ EPSS_URL = "https://api.first.org/data/v1/epss"
 _kev_cache: dict[str, dict] | None = None
 _kev_fetched_at: float | None = None
 KEV_TTL = 24 * 60 * 60  # seconds
-EPSS_BATCH = 100
+# EPSS scores are requested in a single call; CVEs beyond this cap stay
+# unscored rather than being chunked into extra requests.
+EPSS_MAX_CVES = 100
 
 
 async def _fetch_kev() -> dict[str, dict]:
@@ -44,7 +46,7 @@ async def _fetch_kev() -> dict[str, dict]:
 async def _fetch_epss(cves: list[str]) -> dict[str, float]:
     if not cves:
         return {}
-    cves = sorted(set(cves))[:EPSS_BATCH]
+    cves = sorted(set(cves))[:EPSS_MAX_CVES]
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
         resp = await client.get(EPSS_URL, params={"cve": ",".join(cves)})
         resp.raise_for_status()
@@ -77,7 +79,10 @@ async def enrich_items(items: list[FeedItem]) -> list[FeedItem]:
 
     for item in items:
         item.kev = any(cve in kev for cve in item.cves)
-        item.epss_score = max((epss.get(cve, 0.0) for cve in item.cves), default=None)
+        # Only report a score we actually received: a CVE EPSS does not know
+        # (or an unavailable EPSS response) must stay ``None``, not 0.0.
+        known_scores = [epss[cve] for cve in item.cves if cve in epss]
+        item.epss_score = max(known_scores) if known_scores else None
         if item.kev:
             item.tags.add("exploit")
             item.tags.add("kev")
