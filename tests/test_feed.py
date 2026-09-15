@@ -1,15 +1,13 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from app.fetcher import (
-    CVE_RE,
     _dedupe,
     _ensure_aware,
     _extract_cves,
     _infer_severity,
     _infer_tags,
+    _is_relevant,
     _patch_status_from_text,
     _redhat_patch_status,
     _sample_items,
@@ -240,3 +238,20 @@ def test_epss_request_is_capped_not_chunked(monkeypatch):
 
     assert asyncio.run(enrich_module._fetch_epss(over_cap)) == {}
     assert captured["params"]["cve"].count(",") == enrich_module.EPSS_MAX_CVES - 1
+
+
+def test_is_relevant_filters_only_the_broad_sources():
+    from app.sources import Source
+
+    k8s = Source(id="k8s", name="K8s", kind="rss", url="u")
+    cisa = Source(id="cisa", name="CISA", kind="rss", url="u")
+    ubuntu = Source(id="ubuntu", name="Ubuntu", kind="rss", url="u")
+
+    # The Kubernetes blog also carries release notes and tutorials.
+    assert _is_relevant(k8s, "Kubernetes v1.32 release notes") is False
+    assert _is_relevant(k8s, "CVE-2025-0001: kubelet vulnerability fixed") is True
+    # CISA carries ICS/OT advisories that are off-topic for this feed.
+    assert _is_relevant(cisa, "Siemens SIMATIC ICS advisory") is False
+    assert _is_relevant(cisa, "Advisory: Kubernetes cluster takeover") is True
+    # Topic-scoped sources are never filtered here.
+    assert _is_relevant(ubuntu, "USN-7234-1: Linux kernel vulnerabilities") is True

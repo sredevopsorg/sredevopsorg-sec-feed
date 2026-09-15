@@ -13,9 +13,10 @@ Rate limits:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -189,12 +190,8 @@ async def fetch_recent_reports(limit_commits: int = 5) -> tuple[list[FeedItem], 
 
 
 async def _cursor() -> str | None:
-    import asyncio
-
     return await asyncio.to_thread(store.get_source_cursor, "ossf-malicious")
 
 
 async def _set_cursor(sha: str) -> None:
-    import asyncio
-
     await asyncio.to_thread(store.set_source_cursor, "ossf-malicious", sha)

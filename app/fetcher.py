@@ -9,7 +9,6 @@ persistence, indexing, publishing, alerting) lives in ``app/pipeline.py``.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import urllib.parse
@@ -82,20 +81,19 @@ def _extract_cvss_score(text: str) -> float | None:
 
 
 def _is_relevant(source: Source, text: str) -> bool:
-    """Return True when an item is on-topic for this feed."""
+    """Return True when an item is on-topic for this feed.
+
+    Most sources are already topic-scoped (distro trackers, cloud bulletins,
+    keyword-scoped NVD queries), so only the two broad feeds are filtered.
+    """
     t = text.lower()
-    # Sources that are already topic-scoped (distro trackers, cloud bulletins,
-    # keyword-scoped NVD queries) are kept unless explicitly filtered below.
     if source.id == "k8s":
+        # The Kubernetes blog also publishes release notes and tutorials.
         return any(w in t for w in SECURITY_KEYWORDS)
     if source.id == "cisa":
         # CISA publishes both ICS/OT and enterprise advisories. Keep only the
         # ones that touch our target ecosystem.
         return any(w in t for w in TARGET_KEYWORDS)
-    if source.id == "redhat":
-        # Red Hat CVE DB returns CVEs from every Red Hat product. Keep only
-        # entries that are Linux-platform relevant (which is most of them).
-        return True
     return True
 
 HTTP_TIMEOUT = 8.0

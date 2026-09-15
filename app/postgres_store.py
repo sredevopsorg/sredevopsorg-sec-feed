@@ -80,10 +80,18 @@ def _now_iso() -> str:
 def init_db(db_path: str = "") -> None:
     with _connect() as conn:
         conn.execute(SCHEMA)
-        # Lightweight migration for databases created before patch_status.
-        conn.execute(
-            "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS patch_status TEXT NOT NULL DEFAULT 'unknown'"
-        )
+        # Lightweight migrations for databases created before these columns
+        # existed (kept in step with app/sqlite_store.py).
+        for statement in (
+            "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS is_sample BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS kev BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS epss_score DOUBLE PRECISION",
+            "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS osv_affected JSONB NOT NULL DEFAULT '[]'",
+            "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS osv_fixed JSONB NOT NULL DEFAULT '[]'",
+            "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS osv_severity TEXT",
+            "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS patch_status TEXT NOT NULL DEFAULT 'unknown'",
+        ):
+            conn.execute(statement)
 
 
 def seed_if_empty(db_path: str = "") -> int:
@@ -113,13 +121,13 @@ def upsert_items(items: list[FeedItem], db_path: str = "") -> int:
                 _jsonb(item.cves),
                 item.severity,
                 bool(item.urgent),
-                bool(getattr(item, "kev", False)),
-                getattr(item, "epss_score", None),
-                bool(getattr(item, "is_sample", False)),
-                _jsonb(getattr(item, "osv_affected", [])),
-                _jsonb(getattr(item, "osv_fixed", [])),
-                getattr(item, "osv_severity", None),
-                getattr(item, "patch_status", "unknown"),
+                bool(item.kev),
+                item.epss_score,
+                bool(item.is_sample),
+                _jsonb(item.osv_affected),
+                _jsonb(item.osv_fixed),
+                item.osv_severity,
+                item.patch_status,
                 now,
                 now,
             )
@@ -182,9 +190,9 @@ def _row_to_item(row: dict[str, Any], now: datetime | None = None) -> dict[str, 
         severity=row.get("severity") or "unknown",
         urgent=bool(row.get("urgent")),
     )
-    item.kev = bool(row.get("kev"))  # type: ignore[attr-defined]
-    item.epss_score = row.get("epss_score")  # type: ignore[attr-defined]
-    item.is_sample = bool(row.get("is_sample"))  # type: ignore[attr-defined]
+    item.kev = bool(row.get("kev"))
+    item.epss_score = row.get("epss_score")
+    item.is_sample = bool(row.get("is_sample"))
     item.osv_affected = list(row.get("osv_affected") or [])
     item.osv_fixed = list(row.get("osv_fixed") or [])
     item.osv_severity = row.get("osv_severity")
