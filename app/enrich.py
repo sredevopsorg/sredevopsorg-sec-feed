@@ -9,8 +9,7 @@ from __future__ import annotations
 import logging
 import time
 
-import httpx
-
+from . import http_client
 from .fetcher import FeedItem
 
 logger = logging.getLogger(__name__)
@@ -31,7 +30,7 @@ async def _fetch_kev() -> dict[str, dict]:
     now = time.time()
     if _kev_cache is not None and _kev_fetched_at and (now - _kev_fetched_at) < KEV_TTL:
         return _kev_cache
-    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+    async with http_client.client() as client:
         resp = await client.get(KEV_URL)
         resp.raise_for_status()
         data = resp.json()
@@ -46,7 +45,7 @@ async def _fetch_epss(cves: list[str]) -> dict[str, float]:
     if not cves:
         return {}
     cves = sorted(set(cves))[:EPSS_MAX_CVES]
-    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+    async with http_client.client() as client:
         resp = await client.get(EPSS_URL, params={"cve": ",".join(cves)})
         resp.raise_for_status()
         data = resp.json()

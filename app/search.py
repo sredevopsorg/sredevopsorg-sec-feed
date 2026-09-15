@@ -24,9 +24,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
-
-from . import store
+from . import http_client, store
 from .config import settings
 from .fetcher import FeedItem, _ensure_aware, _time_ago, item_to_dict
 
@@ -75,7 +73,7 @@ async def ensure_index() -> None:
         return
     base = OPENSEARCH_URL.rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT) as client:
+        async with http_client.client(timeout=SEARCH_TIMEOUT) as client:
             exists = await client.head(f"{base}/{INDEX_NAME}")
             if exists.status_code == 200:
                 return
@@ -118,7 +116,7 @@ async def _bulk(docs: list[dict[str, Any]]) -> int:
         bulk_lines.append(f'{{"index": {{"_index": "{INDEX_NAME}", "_id": "{doc["id"]}"}}}}')
         bulk_lines.append(json_dumps(doc))
     payload = "\n".join(bulk_lines) + "\n"
-    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT) as client:
+    async with http_client.client(timeout=SEARCH_TIMEOUT) as client:
         resp = await client.post(
             f"{OPENSEARCH_URL.rstrip('/')}/_bulk",
             content=payload,
@@ -198,7 +196,7 @@ async def _search_opensearch(q: str, tag: str | None, severity: str | None, limi
         "sort": [{"urgent": {"order": "desc"}}, {"published": {"order": "desc"}}],
         "query": {"bool": {"must": must, "filter": filters}},
     }
-    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT) as client:
+    async with http_client.client(timeout=SEARCH_TIMEOUT) as client:
         resp = await client.post(f"{OPENSEARCH_URL.rstrip('/')}/{INDEX_NAME}/_search", json=body)
         resp.raise_for_status()
         data = resp.json()

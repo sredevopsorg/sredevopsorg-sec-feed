@@ -233,7 +233,7 @@ def test_epss_request_is_capped_not_chunked(monkeypatch):
             captured["params"] = params
             return FakeResponse()
 
-    monkeypatch.setattr(enrich_module.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(enrich_module.http_client, "client", lambda **kwargs: FakeClient())
     over_cap = [f"CVE-2024-{i:04d}" for i in range(enrich_module.EPSS_MAX_CVES + 25)]
 
     assert asyncio.run(enrich_module._fetch_epss(over_cap)) == {}

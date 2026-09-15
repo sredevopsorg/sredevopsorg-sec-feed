@@ -15,9 +15,7 @@ import logging
 import smtplib
 from email.message import EmailMessage
 
-import httpx
-
-from . import store
+from . import http_client, store
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -48,7 +46,7 @@ def _format_item(item: dict) -> str:
 
 
 async def _send_slack(webhook_url: str, text: str) -> None:
-    async with httpx.AsyncClient(timeout=8.0) as client:
+    async with http_client.client() as client:
         resp = await client.post(webhook_url, json={"text": text})
         resp.raise_for_status()
 
@@ -86,7 +84,7 @@ def _discord_payload(item: dict) -> dict:
 
 
 async def _send_discord(webhook_url: str, item: dict) -> None:
-    async with httpx.AsyncClient(timeout=8.0) as client:
+    async with http_client.client() as client:
         resp = await client.post(webhook_url, json=_discord_payload(item))
         resp.raise_for_status()
 

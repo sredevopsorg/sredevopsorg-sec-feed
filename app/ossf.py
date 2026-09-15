@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from . import store
+from . import http_client, store
 from .config import settings
 from .fetcher import (
     FeedItem,
@@ -56,16 +56,15 @@ TOPIC_KEYWORDS = (
     "terraform", "ansible", "openssl", "openssh", "kernel", "systemd",
 )
 
-GITHUB_HEADERS = {
-    "Accept": "application/vnd.github+json",
-    "User-Agent": "security-live-feed-mvp/0.3",
-}
+# The shared user agent is added by app.http_client; only GitHub-specific
+# headers belong here.
+GITHUB_HEADERS = {"Accept": "application/vnd.github+json"}
 if GITHUB_TOKEN:
     GITHUB_HEADERS["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 
 
 def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=15.0, headers=GITHUB_HEADERS, follow_redirects=True)
+    return http_client.client(timeout=15.0, headers=GITHUB_HEADERS)
 
 
 def _parse_published(value: str | None) -> datetime | None:
