@@ -1,10 +1,12 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from app.fetcher import (
     CVE_RE,
     _dedupe,
+    _ensure_aware,
     _extract_cves,
     _infer_severity,
     _infer_tags,
@@ -13,6 +15,7 @@ from app.fetcher import (
     _sample_items,
     _time_ago,
     FeedItem,
+    item_to_dict,
     normalize_patch_status,
 )
 
@@ -114,6 +117,30 @@ def test_patch_status_from_text():
     assert _patch_status_from_text(ubuntu, "CVE-2024-0001 ... Ubuntu is not affected") == "not-affected"
     # Non-distro sources stay unknown.
     assert _patch_status_from_text(k8s, "Kubernetes security advisory") == "unknown"
+
+
+def test_ensure_aware_converts_offsets_to_utc():
+    shifted = datetime(2025, 1, 1, 10, 0, tzinfo=timezone(timedelta(hours=-4)))
+    normalized = _ensure_aware(shifted)
+    assert normalized == datetime(2025, 1, 1, 14, 0, tzinfo=timezone.utc)
+    assert normalized.utcoffset() == timedelta(0)
+
+
+def test_ensure_aware_treats_naive_values_as_utc():
+    assert _ensure_aware(datetime(2025, 1, 1, 12, 0)) == datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def test_item_to_dict_always_publishes_utc():
+    item = FeedItem(
+        id="tz",
+        title="t",
+        summary="s",
+        url="u",
+        source="src",
+        source_url="su",
+        published=datetime(2025, 1, 1, 10, 0, tzinfo=timezone(timedelta(hours=-4))),
+    )
+    assert item_to_dict(item)["published"] == "2025-01-01T14:00:00+00:00"
 
 
 # ---------------------------------------------------------------------------
