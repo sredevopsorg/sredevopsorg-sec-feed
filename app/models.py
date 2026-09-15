@@ -36,9 +36,15 @@ class FeedItem:
 
 
 def _ensure_aware(dt: datetime) -> datetime:
+    """Return dt as an aware UTC datetime.
+
+    Aware values are *converted*, not merely re-tagged: every timestamp the app
+    serializes must be UTC, because the SQLite adapter orders rows by the ISO
+    string, which only matches chronological order while all offsets agree.
+    """
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
-    return dt
+    return dt.astimezone(timezone.utc)
 
 
 def _hash_item(unique: str, fallback: str) -> str:

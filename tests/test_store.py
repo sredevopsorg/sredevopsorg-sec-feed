@@ -5,7 +5,7 @@ from app.fetcher import FeedItem
 from app.store import init_db, mark_alerted, query_feed, search_feed, seed_if_empty, stats, unalerted_urgent_items, upsert_items
 
 
-def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = frozenset({"linux"}), cves: list[str] | None = None, severity: str = "high", urgent: bool = False, patch_status: str = "unknown") -> FeedItem:
+def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = frozenset({"linux"}), cves: list[str] | None = None, severity: str = "high", urgent: bool = False, patch_status: str = "unknown", published: datetime | None = None) -> FeedItem:
     return FeedItem(
         id=id,
         title=title,
@@ -13,7 +13,7 @@ def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = froz
         url="https://example.com/" + id,
         source="test",
         source_url="https://example.com/feed",
-        published=datetime.now(timezone.utc) - timedelta(hours=1),
+        published=published or datetime.now(timezone.utc) - timedelta(hours=1),
         tags=set(tags),
         cves=cves or ["CVE-2024-0001"],
         severity=severity,
@@ -64,6 +64,24 @@ def test_stats(tmp_path):
     assert s["total"] > 0
     assert "by_tag" in s
     assert "by_severity" in s
+
+
+def test_query_feed_orders_mixed_offsets_by_real_time(tmp_path):
+    """Timestamps are normalized to UTC before they are stored as text."""
+    db = str(tmp_path / "feed.db")
+    init_db(db)
+    older_utc = datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc)
+    newer_shifted = datetime(2025, 1, 1, 10, 0, tzinfo=timezone(timedelta(hours=-4)))  # 14:00 UTC
+    upsert_items(
+        [
+            make_item("old", "Older advisory", published=older_utc),
+            make_item("new", "Newer advisory", published=newer_shifted),
+        ],
+        db,
+    )
+    rows = query_feed(limit=10, db_path=db)
+    assert [row["id"] for row in rows] == ["new", "old"]
+    assert rows[0]["published"].endswith("+00:00")
 
 
 def test_patch_status_roundtrip(tmp_path):
