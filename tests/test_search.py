@@ -30,6 +30,7 @@ def test_doc_from_item_omits_time_ago():
     )
     doc = _doc_from_item(item)
     assert "time_ago" not in doc
+    assert doc["is_sample"] is False  # indexed so sample rows can be filtered/purged
     assert doc["id"] == "a"
     assert doc["tags"] == ["linux"]
     assert doc["patch_status"] == "fixed"

@@ -143,6 +143,17 @@ def test_item_to_dict_always_publishes_utc():
     assert item_to_dict(item)["published"] == "2025-01-01T14:00:00+00:00"
 
 
+def test_item_to_dict_exposes_is_sample():
+    """The API contract reports whether a row is fallback/sample data."""
+    from app.fetcher import item_to_dict
+
+    live = FeedItem(id="l", title="t", summary="s", url="u", source="src", source_url="su", published=None)
+    sample = FeedItem(id="s", title="t", summary="s", url="u", source="src", source_url="su", published=None, is_sample=True)
+    assert item_to_dict(live)["is_sample"] is False
+    assert item_to_dict(sample)["is_sample"] is True
+    assert all(item_to_dict(item)["is_sample"] is True for item in _sample_items())
+
+
 # ---------------------------------------------------------------------------
 # Enrichment (KEV + EPSS)
 # ---------------------------------------------------------------------------
