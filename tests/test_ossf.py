@@ -1,3 +1,5 @@
+import app.fetcher as fetcher
+import app.ossf as ossf
 from app.ossf import _build_item, _is_relevant_ossf
 
 
@@ -32,3 +34,22 @@ def test_build_item_from_go_report():
 def test_build_item_skips_placeholders():
     data = {"id": "MAL-0000-ghsa-malware-abc123", "summary": "placeholder"}
     assert _build_item("osv/malicious/npm/foo/MAL-0000-ghsa-malware-abc123.json", data) is None
+
+
+def test_build_item_uppercases_lowercase_cve_ids():
+    """CVE ids are normalized, matching the FeedItem contract."""
+    data = {
+        "id": "MAL-2025-9001",
+        "summary": "Malicious code in github.com/acme/linux-tool (Go)",
+        "details": "Drops a payload exploiting cve-2025-0001 on linux hosts.",
+        "published": "2025-04-01T00:00:00Z",
+        "affected": [{"package": {"ecosystem": "Go", "name": "github.com/acme/linux-tool"}}],
+    }
+    item = _build_item("osv/malicious/go/github.com/acme/linux-tool/MAL-2025-9001.json", data)
+    assert item is not None
+    assert item.cves == ["CVE-2025-0001"]
+
+
+def test_ossf_uses_the_shared_cve_extractor():
+    """OSSF must not carry a second, divergent CVE extractor."""
+    assert ossf._extract_cves is fetcher._extract_cves

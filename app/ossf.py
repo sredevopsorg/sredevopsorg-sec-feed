@@ -23,9 +23,9 @@ import httpx
 from . import store
 from .config import settings
 from .fetcher import (
-    CVE_RE,
     FeedItem,
     _ensure_aware,
+    _extract_cves,
     _hash_item,
     _infer_severity,
     _infer_tags,
@@ -119,10 +119,6 @@ def _build_item(path: str, data: dict[str, Any]) -> FeedItem | None:
         severity=severity,
         urgent=True,
     )
-
-
-def _extract_cves(text: str) -> list[str]:
-    return list(dict.fromkeys(CVE_RE.findall(text)))
 
 
 async def fetch_recent_reports(limit_commits: int = 5) -> tuple[list[FeedItem], str | None]:
