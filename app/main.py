@@ -36,8 +36,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("OpenSearch startup sync failed")
 
-    # Warm/refresh the live cache in the background.
-    asyncio.create_task(pipeline.refresh_feed())
+    # Warm/refresh the live cache in the background (single-flight).
+    pipeline.schedule_refresh()
     yield
 
 
