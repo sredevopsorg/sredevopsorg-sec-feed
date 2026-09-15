@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 class Source:
     id: str
     name: str
-    kind: str  # "rss" or "nvd"
+    kind: str  # "rss" | "nvd" | "redhat-api" | "ossf-malicious"
     url: str
     tags: frozenset[str] = field(default_factory=frozenset)
     max_items: int = 12

@@ -11,7 +11,6 @@ Channels are opt-in via environment variables:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import smtplib
 from email.message import EmailMessage

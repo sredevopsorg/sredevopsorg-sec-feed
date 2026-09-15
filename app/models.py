@@ -92,12 +92,12 @@ def item_to_dict(item: FeedItem, now: datetime | None = None) -> dict[str, Any]:
         "cves": item.cves,
         "severity": item.severity,
         "urgent": item.urgent,
-        "kev": getattr(item, "kev", False),
-        "epss_score": getattr(item, "epss_score", None),
-        "osv_affected": getattr(item, "osv_affected", []),
-        "osv_fixed": getattr(item, "osv_fixed", []),
-        "osv_severity": getattr(item, "osv_severity", None),
-        "patch_status": getattr(item, "patch_status", "unknown"),
+        "kev": item.kev,
+        "epss_score": item.epss_score,
+        "osv_affected": item.osv_affected,
+        "osv_fixed": item.osv_fixed,
+        "osv_severity": item.osv_severity,
+        "patch_status": item.patch_status,
         "is_sample": bool(item.is_sample),
     }
 

@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .config import settings
 from .models import FeedItem, _ensure_aware, _sample_items, item_to_dict
@@ -57,13 +58,23 @@ CREATE TABLE IF NOT EXISTS source_cursors (
 """
 
 
-def _connect(db_path: str = DB_PATH) -> sqlite3.Connection:
+@contextmanager
+def _connect(db_path: str = DB_PATH) -> Iterator[sqlite3.Connection]:
+    """Open a connection, commit on success, roll back on error, and close it.
+
+    Closing in a finally block (rather than relying on reference counting)
+    guarantees the file handle is released even when a caller raises.
+    """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db(db_path: str = DB_PATH) -> None:
@@ -73,6 +84,10 @@ def init_db(db_path: str = DB_PATH) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(feed_items)")}
         if "is_sample" not in columns:
             conn.execute("ALTER TABLE feed_items ADD COLUMN is_sample INTEGER NOT NULL DEFAULT 0")
+        if "kev" not in columns:
+            conn.execute("ALTER TABLE feed_items ADD COLUMN kev INTEGER NOT NULL DEFAULT 0")
+        if "epss_score" not in columns:
+            conn.execute("ALTER TABLE feed_items ADD COLUMN epss_score REAL")
         if "osv_affected" not in columns:
             conn.execute("ALTER TABLE feed_items ADD COLUMN osv_affected TEXT NOT NULL DEFAULT '[]'")
         if "osv_fixed" not in columns:
@@ -113,13 +128,13 @@ def upsert_items(items: list[FeedItem], db_path: str = DB_PATH) -> int:
                 json.dumps(item.cves),
                 item.severity,
                 1 if item.urgent else 0,
-                1 if getattr(item, "kev", False) else 0,
-                getattr(item, "epss_score", None),
-                1 if getattr(item, "is_sample", False) else 0,
-                json.dumps(getattr(item, "osv_affected", []) or []),
-                json.dumps(getattr(item, "osv_fixed", []) or []),
-                getattr(item, "osv_severity", None),
-                getattr(item, "patch_status", "unknown"),
+                1 if item.kev else 0,
+                item.epss_score,
+                1 if item.is_sample else 0,
+                json.dumps(item.osv_affected),
+                json.dumps(item.osv_fixed),
+                item.osv_severity,
+                item.patch_status,
                 now,
                 now,
             )
@@ -179,9 +194,9 @@ def row_to_item(row: sqlite3.Row, now: datetime | None = None) -> dict[str, Any]
         urgent=bool(row["urgent"]),
     )
     if row["kev"]:
-        item.kev = True  # type: ignore[attr-defined]
+        item.kev = True
     if row["epss_score"] is not None:
-        item.epss_score = row["epss_score"]  # type: ignore[attr-defined]
+        item.epss_score = row["epss_score"]
     item.is_sample = bool(row["is_sample"])
     item.osv_affected = json.loads(row["osv_affected"] or "[]")
     item.osv_fixed = json.loads(row["osv_fixed"] or "[]")
