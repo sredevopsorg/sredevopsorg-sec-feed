@@ -1,5 +1,5 @@
 # Production API image — pure JSON API, runs as a non-root user.
-FROM python:3.13-slim
+FROM docker.io/python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
