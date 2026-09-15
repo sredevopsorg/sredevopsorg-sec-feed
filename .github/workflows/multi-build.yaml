@@ -7,7 +7,8 @@ on:
     paths:
       - Dockerfile
       - requirements.txt
-      - app/
+      - app/*
+      - .github/workflows/multi-build.yaml
     tags:
       - v*
   workflow_dispatch:
