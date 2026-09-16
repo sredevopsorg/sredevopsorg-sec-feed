@@ -54,7 +54,9 @@ def _ensure_pool() -> ConnectionPool:
             },
             min_size=s.db_pool_min_size,
             max_size=s.db_pool_max_size,
-            open=False,
+            # `open=True` fills min_size connections in the background without
+            # blocking; the pool itself is only built lazily, on first use.
+            open=True,
         )
     return _POOL
 
