@@ -28,11 +28,28 @@ def _int(value: str | None, default: int) -> int:
         return default
 
 
+def _opt_int(value: str | None) -> int | None:
+    """Parse an optional int: empty/None/invalid -> None."""
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class Settings:
     # Storage
     database_url: str | None
     sqlite_db_path: str
+    # Postgres connection pool (Postgres/Supabase backend only)
+    db_pool_min_size: int
+    db_pool_max_size: int
+    db_prepare_threshold: int | None
+    db_connect_timeout: int
+    db_sslmode: str
+    db_application_name: str
     # Search
     opensearch_url: str | None
     opensearch_index: str
@@ -58,6 +75,12 @@ class Settings:
         return cls(
             database_url=env.get("DATABASE_URL") or None,
             sqlite_db_path=env.get("SECURITY_FEED_DB", _DEFAULT_SQLITE_DB),
+            db_pool_min_size=_int(env.get("DB_POOL_MIN_SIZE"), 1),
+            db_pool_max_size=_int(env.get("DB_POOL_MAX_SIZE"), 4),
+            db_prepare_threshold=_opt_int(env.get("DB_PREPARE_THRESHOLD")),
+            db_connect_timeout=_int(env.get("DB_CONNECT_TIMEOUT"), 10),
+            db_sslmode=env.get("DB_SSLMODE") or "prefer",
+            db_application_name=env.get("DB_APPLICATION_NAME") or "security-feed",
             opensearch_url=env.get("OPENSEARCH_URL") or None,
             opensearch_index=env.get("OPENSEARCH_INDEX", "security-feed"),
             cors_origins=_csv(env.get("CORS_ORIGINS", "*")),

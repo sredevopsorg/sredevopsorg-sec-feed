@@ -11,6 +11,12 @@ def test_settings_defaults():
     assert s.log_level == "INFO"
     assert s.smtp_port == 587
     assert s.alert_from == "security-feed@example.com"
+    assert s.db_pool_min_size == 1
+    assert s.db_pool_max_size == 4
+    assert s.db_prepare_threshold is None
+    assert s.db_connect_timeout == 10
+    assert s.db_sslmode == "prefer"
+    assert s.db_application_name == "security-feed"
 
 
 def test_settings_csv_parsing():
@@ -21,6 +27,30 @@ def test_settings_csv_parsing():
 def test_settings_int_parsing():
     assert Settings.from_env({"SMTP_PORT": "2525"}).smtp_port == 2525
     assert Settings.from_env({"SMTP_PORT": "not-a-number"}).smtp_port == 587
+
+
+def test_settings_db_pool_parsing():
+    s = Settings.from_env({
+        "DB_POOL_MIN_SIZE": "2",
+        "DB_POOL_MAX_SIZE": "8",
+        "DB_PREPARE_THRESHOLD": "5",
+        "DB_CONNECT_TIMEOUT": "30",
+        "DB_SSLMODE": "require",
+        "DB_APPLICATION_NAME": "feed-api",
+    })
+    assert s.db_pool_min_size == 2
+    assert s.db_pool_max_size == 8
+    assert s.db_prepare_threshold == 5
+    assert s.db_connect_timeout == 30
+    assert s.db_sslmode == "require"
+    assert s.db_application_name == "feed-api"
+
+
+def test_settings_db_prepare_threshold_optional():
+    assert Settings.from_env({}).db_prepare_threshold is None
+    assert Settings.from_env({"DB_PREPARE_THRESHOLD": ""}).db_prepare_threshold is None
+    assert Settings.from_env({"DB_PREPARE_THRESHOLD": "not-a-number"}).db_prepare_threshold is None
+    assert Settings.from_env({"DB_PREPARE_THRESHOLD": "0"}).db_prepare_threshold == 0
 
 
 def test_settings_optional_values():

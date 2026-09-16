@@ -25,7 +25,20 @@ services:
     container_name: api
     hostname: api
     environment:
+      # Self-hosted PostgreSQL (uncomment to use the local `postgres` service):
       # - DATABASE_URL=postgresql://feed:feed@postgres:5432/feed
+      # Hosted Supabase (session-mode pooler; copy the exact host from the
+      # dashboard "Connect" dialog and use the `postgres.PROJECT-REF` user):
+      # - DATABASE_URL=postgresql://postgres.PROJECT-REF:PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres
+      # - DB_SSLMODE=require
+      # Optional Postgres pool tuning (defaults shown):
+      # - DB_POOL_MIN_SIZE=1
+      # - DB_POOL_MAX_SIZE=4
+      # - DB_CONNECT_TIMEOUT=10
+      # - DB_APPLICATION_NAME=security-feed
+      # Prepared statements are off by default (safe for any pooler mode). Set
+      # DB_PREPARE_THRESHOLD=5 only on a direct or session-mode connection.
+      # - DB_PREPARE_THRESHOLD=5
       - SECURITY_FEED_DB=/app/data/feed.db
       # Comma-separated allowed CORS origins; defaults to "*" (local dev).
       # - CORS_ORIGINS=https://feed.example.com,https://cdn.example.com

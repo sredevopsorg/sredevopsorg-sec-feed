@@ -235,6 +235,42 @@ unavailable OpenSearch never breaks the feed. Sample/fallback rows are never
 indexed, and any sample document left over from an earlier offline boot is
 purged once live rows exist, so search matches the SQL behaviour exactly.
 
+### PostgreSQL / Supabase configuration
+
+Setting `DATABASE_URL` switches the store from SQLite to PostgreSQL (self-hosted
+or hosted Supabase). On startup the app creates the schema idempotently —
+tables, indexes, the `pg_trgm` extension, and row-level security — and connects
+through an application-side connection pool.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | unset (→ SQLite) | `postgresql://…` connection string |
+| `DB_POOL_MIN_SIZE` | `1` | pool min size |
+| `DB_POOL_MAX_SIZE` | `4` | pool max size (Supabase Nano/Micro allows 60 DB connections) |
+| `DB_PREPARE_THRESHOLD` | unset (prepared statements off) | set `5` only on direct/session mode |
+| `DB_CONNECT_TIMEOUT` | `10` | libpq connect timeout, seconds |
+| `DB_SSLMODE` | `prefer` | set `require` for Supabase |
+| `DB_APPLICATION_NAME` | `security-feed` | `application_name` in `pg_stat_activity` |
+
+**Supabase.** Use the *session-mode* pooler (`:5432`) or a direct connection —
+both support prepared statements and session state. Transaction mode (`:6543`)
+also works because prepared statements are disabled by default. Copy the exact
+host from the dashboard **Connect** dialog: the direct host is
+`db.PROJECT-REF.supabase.co`, the pooler host is
+`aws-INDEX-REGION.pooler.supabase.com`, and the pooler username is
+`postgres.PROJECT-REF`.
+
+```bash
+DATABASE_URL="postgresql://postgres.PROJECT-REF:PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres"
+DB_SSLMODE=require
+```
+
+Notes: `DB_PREPARE_THRESHOLD` must stay a code setting, not a URL parameter
+(libpq rejects it in the connection string). Free-plan projects pause after
+about a week of low database activity; a deployed feed with background refresh
+plus `/health` traffic keeps it active, and a paid plan removes pausing
+altogether.
+
 ### Kubernetes quickstart
 
 Requires `kubectl` and access to a cluster (Kustomize is built into `kubectl`).

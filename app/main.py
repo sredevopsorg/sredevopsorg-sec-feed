@@ -24,21 +24,25 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialise persistence and make sure there is always something to show,
-    # even before the first live refresh finishes.
-    await asyncio.to_thread(store.init_db)
-    await asyncio.to_thread(store.seed_if_empty)
-
-    # Backfill OpenSearch from the archive if configured (best-effort).
     try:
-        await search_backend.ensure_index()
-        await search_backend.sync_archive()
-    except Exception:
-        logger.exception("OpenSearch startup sync failed")
+        # Initialise persistence and make sure there is always something to show,
+        # even before the first live refresh finishes.
+        await asyncio.to_thread(store.init_db)
+        await asyncio.to_thread(store.seed_if_empty)
 
-    # Warm/refresh the live cache in the background (single-flight).
-    pipeline.schedule_refresh()
-    yield
+        # Backfill OpenSearch from the archive if configured (best-effort).
+        try:
+            await search_backend.ensure_index()
+            await search_backend.sync_archive()
+        except Exception:
+            logger.exception("OpenSearch startup sync failed")
+
+        # Warm/refresh the live cache in the background (single-flight).
+        pipeline.schedule_refresh()
+        yield
+    finally:
+        # Release pooled database connections on shutdown.
+        await asyncio.to_thread(store.close)
 
 
 app = FastAPI(title="Security Intelligence Live Feed API", version="0.2.0-rc.1", lifespan=lifespan)
