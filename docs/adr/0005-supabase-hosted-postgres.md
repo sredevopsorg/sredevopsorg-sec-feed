@@ -101,9 +101,16 @@ so RLS is defence in depth rather than the only control.
   must hold a database connection anyway, so this duplicates rather than removes
   a layer, and it would push the `is_sample` visibility rule and `time_ago`
   computation into RLS policies and frontend JavaScript.
-- **Supabase Realtime instead of SSE.** Rejected: it requires an npm/CDN
-  dependency, breaking the dependency-free frontend invariant (ADR-0001), or a
-  hand-rolled WebSocket protocol client replacing a working, tested broker.
+- **Supabase Realtime instead of SSE.** Rejected, though not for the reason first
+  assumed: Supabase publishes the Realtime wire protocol, so a plain `WebSocket`
+  satisfies the dependency-free frontend invariant and no npm/CDN dependency is
+  required — the invariant blocks the `supabase-js` *client library*, not
+  Supabase. It is still rejected because Postgres Changes authorizes every event
+  against every subscriber on a single thread (Supabase directs heavy fan-out to
+  Broadcast), and because Broadcast, while viable, would replace a working,
+  tested SSE broker with a hand-rolled protocol client — heartbeat, rejoin
+  backoff and a 24-hour connection cap — living in a frontend file with no test
+  suite, for no capability we currently need.
 - **Supabase Edge Functions for the refresh pipeline.** Rejected: TypeScript on
   Deno with a 150 s wall clock and blocked outbound ports 25/587; it would
   reimplement the Python pipeline in a second language and break the SMTP alert

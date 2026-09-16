@@ -296,25 +296,45 @@ Worth doing regardless of the provider, but cheaper to get here than to build.
 
 ### 4.2 Reject — would break invariants or buy nothing
 
-**1. Realtime (Postgres Changes / Broadcast) for live updates — reject.**
-The frontend must stay dependency-free (invariant 1, ADR-0001). Using
-Supabase Realtime means either adding `@supabase/supabase-js` (an npm/CDN
-dependency — forbidden) or hand-implementing the Phoenix-channel WebSocket
-protocol in `frontend/app.js`, which trades a working, tested SSE broker
-(`app/events.py`, `/api/events`) for a hand-rolled protocol client with no test
-coverage. It also requires enabling replication and RLS policies on every
-exposed table, and Postgres Changes is a poor shape for a refresh that mutates
-many rows at once. **Keep SSE.** The correct use of Realtime here would be
-"something changed → refetch", which is exactly what our existing
-`feed_updated` event already does.
+**1. Realtime for live updates — reject, but for narrower reasons than expected.**
+The obvious objection is wrong, and it is worth recording why. Supabase documents
+the Realtime wire protocol in full
+([Realtime Protocol](https://supabase.com/docs/guides/realtime/protocol)), so
+Realtime does **not** require `@supabase/supabase-js` — a plain
+`new WebSocket()` speaking Phoenix channels would satisfy invariant 1. The
+invariant blocks the *client library* (only npm/bundler or the documented CDN
+`<script>` tag exist, and the ESM build has unresolvable bare specifiers), not
+Supabase.
+
+Rejections that survive that correction:
+
+- **Postgres Changes is the wrong mechanism, per Supabase's own guidance.**
+  It authorizes every event against every subscriber on a single thread, and the
+  docs direct you to Broadcast above ~3,000 concurrent subscribers
+  ([Subscribing to database changes](https://supabase.com/docs/guides/realtime/subscribing-to-database-changes)).
+  A refresh that mutates many rows at once is exactly the fan-out that scales
+  worst.
+- **Broadcast would work and is the honest runner-up.** It is send-only, so it
+  works from plain WebSocket *or* from our FastAPI pipeline via the documented
+  REST endpoint with `apikey`. But "something changed → refetch" is precisely
+  what our SSE broker already does (`app/events.py`, `/api/events`), and SSE is
+  strictly simpler: native `EventSource`, no heartbeat to hand-roll every 25 s,
+  no rejoin-with-backoff logic, no 24-hour public-connection cap, and no new
+  table grants or RLS policies. **Keep SSE.** Revisit only if browser-native
+  updates ever need to reach clients that cannot hold an SSE connection.
+
+Note the client-side cost we avoid either way: a hand-rolled protocol client
+would live in `frontend/app.js`, which has no test suite.
 
 **2. The Data API (PostgREST) as the frontend's read path — reject.**
 It would move reads off our API, but the API is not a bottleneck: it serves from
 the store in milliseconds and the frontend already reverse-proxies through
 nginx. Adopting it would require RLS on `public` tables, hand-maintained
-`GRANT`s (new tables in `public` are no longer auto-exposed —
-[changelog 2026-04-28](https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically)),
-and would forfeit server-side `time_ago` computation and the `is_sample`
+`GRANT`s — new tables in `public` stop being auto-exposed, opt-in since
+2026-04-28, default for new projects from 2026-05-30, and **enforced on all
+existing projects from 2026-10-30**
+([changelog](https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically))
+— and would forfeit server-side `time_ago` computation and the `is_sample`
 visibility rule — i.e. it would recreate, in RLS policies and frontend JS, logic
 that currently has tests. Our API must keep a database connection regardless, so
 the Data API is duplication, not simplification.
@@ -402,6 +422,8 @@ from a warm process cache.
 | 5 | Deploy target may restrict outbound 5432 | Verify before cutover; pooler is a different host/port to test |
 | 6 | Supabase breaking changes | Re-verify all docs links at implementation time; pin the CLI version |
 | 7 | Ties the project to a hosted vendor | Adapter is provider-agnostic; self-hosted Postgres stays a documented, tested fallback. The runtime role owns nothing, so `pg_dump`/restore is clean |
+| 8 | **Data API auto-exposure is enforced from 2026-10-30** | Harmless here — we deliberately do not expose these tables, so there is nothing to opt in. Listed because it changes what a *future* Data API decision costs: tables will need explicit `GRANT`s |
+| 9 | Legacy `anon` / `service_role` keys are deprecated by end of 2026 | Use publishable/secret keys from the start. Secret keys must never reach the browser — Supabase returns 401 for them based on `User-Agent` |
 
 Open questions requiring a decision before Phase 3:
 
