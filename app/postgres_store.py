@@ -235,7 +235,8 @@ def upsert_items(items: list[FeedItem], db_path: str = "") -> int:
         # it becomes a real BEGIN/COMMIT rather than a SAVEPOINT inside an
         # implicit transaction left open by a prior query.
         with conn.transaction():
-            conn.executemany(
+            cur = conn.cursor()
+            cur.executemany(
                 """
                 INSERT INTO feed_items (
                     id, title, summary, url, source, source_url, published,
@@ -400,7 +401,8 @@ def mark_alerted(item_ids: list[str], db_path: str = "") -> None:
         return
     now = _now_iso()
     with _connection() as conn:
-        conn.executemany(
+        cur = conn.cursor()
+        cur.executemany(
             "INSERT INTO alerted_items (item_id, created_at) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             [(item_id, now) for item_id in item_ids],
         )
