@@ -93,7 +93,14 @@ so RLS is defence in depth rather than the only control.
 - **Shared pooler, transaction mode (port 6543).** Rejected: no prepared
   statements, no session-level advisory locks, and no benefit here — the
   workload is a persistent backend, which is the case transaction mode is not
-  designed for.
+  designed for. A further reason discovered during analysis: psycopg cannot
+  detect a pooler (PgBouncer declined to self-identify), so prepared statements
+  must be disabled in code, and the required setting cannot be expressed in the
+  connection string — libpq rejects `prepare_threshold` and `pgbouncer` as
+  parameters. `executemany()`, used by `upsert_items()` and `mark_alerted()`,
+  forces a named prepared statement on its *first* execution rather than after
+  the default threshold of five, so this would fail on the first refresh rather
+  than subtly later.
 - **Dedicated pooler or direct connection with the IPv4 add-on.** Rejected as a
   starting point: it adds a paid add-on and DNS behaviour (the add-on swaps the
   AAAA record for an A record) before we know we need the lower latency.

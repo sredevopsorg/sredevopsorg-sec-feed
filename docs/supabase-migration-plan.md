@@ -136,9 +136,29 @@ but it is the reason not to set a large `max_size` "just in case".
    `ConnectionPool`. `psycopg_pool` is a separate distribution — it is *not*
    installed by `psycopg[binary]` today (verified: no `psycopg_pool` in the
    environment).
-2. **Explicitly set `prepare_threshold`.** Do not rely on inference:
-   `None` for transaction mode, leave the default (5) for session/direct. Make
-   it a setting so the DSN and the driver cannot disagree.
+2. **Set `prepare_threshold` as a Python kwarg, not in the DSN.** psycopg cannot
+   detect a pooler — there is no auto-disable of prepared statements, because
+   PgBouncer declined to self-identify
+   ([psycopg#1151](https://github.com/psycopg/psycopg/issues/1151),
+   [pgbouncer#653](https://github.com/pgbouncer/pgbouncer/issues/653)), and the
+   installed psycopg 3.3.5 contains no Supavisor/server-version sniffing. The
+   setting is **not** expressible in the connection string: `?prepare_threshold=0`
+   and `?pgbouncer=true` are both rejected by libpq as invalid URI/connection
+   parameters (verified against psycopg 3.3.5 / libpq 18.6), and `pgbouncer=true`
+   is a Prisma-only flag. So the correction to this plan is that a setting cannot
+   keep the DSN and the driver in step — the kwarg is the only mechanism.
+   Use `None` for transaction mode; leave the default (5) for session/direct.
+
+   **Why this matters more than it appears:** `executemany()` does not wait for
+   the threshold. Both `_executemany_gen_pipeline` and `_executemany_gen_no_pipeline`
+   call `_maybe_prepare_gen(pgq, prepare=True)`, and `PrepareManager.get()` returns
+   `SHOULD` when `prepare` is truthy. So under transaction mode, `upsert_items()`
+   and `mark_alerted()` — the repo's only two `executemany` call sites — would hit
+   a **named prepared statement on the very first refresh**, not after five
+   executions. `prepare_threshold=None` is what neutralises it (`_preparing.py`
+   returns `Prepare.NO` before consulting the count). This is a further argument
+   for session mode: not merely that transaction mode is inconvenient, but that
+   its required mitigation cannot live in configuration.
 3. **`sslmode=require` minimum.** libpq defaults to `prefer`, which silently
    falls back to plaintext. `verify-full` + `sslrootcert` once we hold the
    project CA.
@@ -424,6 +444,7 @@ from a warm process cache.
 | 7 | Ties the project to a hosted vendor | Adapter is provider-agnostic; self-hosted Postgres stays a documented, tested fallback. The runtime role owns nothing, so `pg_dump`/restore is clean |
 | 8 | **Data API auto-exposure is enforced from 2026-10-30** | Harmless here — we deliberately do not expose these tables, so there is nothing to opt in. Listed because it changes what a *future* Data API decision costs: tables will need explicit `GRANT`s |
 | 9 | Legacy `anon` / `service_role` keys are deprecated by end of 2026 | Use publishable/secret keys from the start. Secret keys must never reach the browser — Supabase returns 401 for them based on `User-Agent` |
+| 10 | psycopg cannot detect a pooler, and the mitigation is not DSN-expressible | Session mode keeps prepared statements available, so no mitigation is needed. If transaction mode is ever revisited, `prepare_threshold=None` must be a Python kwarg in `_connect()` and `executemany` call sites must be re-checked |
 
 Open questions requiring a decision before Phase 3:
 
