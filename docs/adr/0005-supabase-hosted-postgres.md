@@ -42,8 +42,9 @@ Rationale for session mode over the alternatives:
 - It is IPv4-capable on every plan, so no IPv6 cluster networking and no paid
   IPv4 add-on is required. This removes a deployment prerequisite that cannot be
   fixed from inside the repository.
-- It supports prepared statements, so `psycopg`'s autoprepare can stay at its
-  default instead of being disabled.
+- It supports prepared statements, so the application *may* enable them there;
+  the implementation default remains `prepare_threshold=None` (off) for
+  portability across direct/session/transaction modes and self-hosted Postgres.
 - It preserves session state, which keeps `pg_advisory_lock` available for
   electing a single refresher across replicas.
 
@@ -51,19 +52,23 @@ The direct connection (`db.<ref>.supabase.co:5432`) is the intended end state
 once the deployment target's IPv6 reachability is confirmed, since Supabase
 recommends direct connections for persistent backends and it removes a hop.
 
-The migration is gated on two prerequisites that are valuable independently:
+The migration is gated on **connection pooling** — the correctness and latency
+prerequisite — plus connection hardening:
 
-1. **Connection pooling** (`psycopg_pool`) with an explicit `prepare_threshold`,
-   `connect_timeout`, `sslmode=require`, and `application_name`.
-2. **Versioned migrations** (Supabase CLI `supabase/migrations/`), reducing
-   `init_db()` from "create the schema at container start" to "assert the
-   expected migration is applied". The multi-statement `SCHEMA` constant must not
-   survive as the schema mechanism: it only works by falling back to the simple
-   query protocol when unprepared, and would break once autoprepare triggers.
+1. **Connection pooling** (`psycopg_pool`) with an explicit `prepare_threshold`
+   (a Python kwarg only — libpq rejects it in the connection string; default
+   `None`), `connect_timeout`, `sslmode` (default `prefer`; `require` for
+   Supabase), and `application_name`.
+2. **Idempotent `init_db` retained, with the schema split into single
+   statements** and `pg_trgm`/indexes/RLS applied at startup. Versioned
+   migrations (Supabase CLI `supabase/migrations/`) are a **follow-up**, not a
+   prerequisite: the schema is three tables and `CREATE/ALTER ... IF NOT EXISTS`
+   is safe under concurrent startup.
 
-Runtime connects as a least-privilege `feed_app` role that owns no objects;
-migrations run as `postgres`. Tables are **not** exposed through the Data API,
-so RLS is defence in depth rather than the only control.
+Runtime currently connects as the `postgres` role (which owns the tables and
+bypasses RLS); a least-privilege `feed_app` role is a follow-up. Tables are
+**not** exposed through the Data API, and RLS is enabled as defence in depth
+rather than the only control.
 
 ## Consequences
 
