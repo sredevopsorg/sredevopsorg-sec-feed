@@ -148,9 +148,11 @@ _EXTENSION_STATEMENTS = (
 # supabase-postgres-best-practices rules for jsonb GIN and trigram indexing).
 _INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_feed_items_tags ON feed_items USING gin (tags jsonb_path_ops)",
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_title_trgm ON feed_items USING gin (title gin_trgm_ops)",
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_summary_trgm ON feed_items USING gin (summary gin_trgm_ops)",
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_cves_trgm ON feed_items USING gin ((cves::text) gin_trgm_ops)",
+    # Schema-qualify gin_trgm_ops: the extension lives in the `extensions`
+    # schema, which is not on postgres:16-alpine's default search_path.
+    "CREATE INDEX IF NOT EXISTS idx_feed_items_title_trgm ON feed_items USING gin (title extensions.gin_trgm_ops)",
+    "CREATE INDEX IF NOT EXISTS idx_feed_items_summary_trgm ON feed_items USING gin (summary extensions.gin_trgm_ops)",
+    "CREATE INDEX IF NOT EXISTS idx_feed_items_cves_trgm ON feed_items USING gin ((cves::text) extensions.gin_trgm_ops)",
     "CREATE INDEX IF NOT EXISTS idx_feed_items_severity ON feed_items (severity)",
 )
 
