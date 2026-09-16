@@ -164,15 +164,45 @@ but it is the reason not to set a large `max_size` "just in case".
    project CA.
 4. **`application_name`** on the connection, so the Supabase *Database
    Connections* dashboard breaks our traffic out from PostgREST/Auth/Storage.
-5. **Do not use the multi-statement `SCHEMA` constant over a pooler.** It works
-   today only because `psycopg` falls back to the simple query protocol when
-   there are no parameters *and* the query is not prepared
-   (`psycopg/_cursor_base.py`, `_execute_send`, line 457 in 3.3.5). At the default
-   `prepare_threshold=5` that constant would eventually be sent prepared, and
-   `CREATE TABLE` inside a prepared statement is invalid. `init_db` becomes a
-   version check once real migrations exist (§3).
-6. **Retire the `db_path` parameter** on the Postgres adapter's functions. It is
-   vestigial on this backend and is currently accepted-and-ignored in 11
+5. **The multi-statement `SCHEMA` constant is a latent trap, not a working
+   pattern.** It works today only because `psycopg` falls back to the simple
+   query protocol when there are no parameters *and* the query is not prepared
+   (`psycopg/_cursor_base.py`, `_execute_send`, line 457 in 3.3.5). At the
+   default `prepare_threshold=5` it would eventually be sent prepared, and DDL
+   inside a prepared statement is invalid — `cannot insert multiple commands into
+   a prepared statement` (`psycopg.errors.SyntaxError`, SQLSTATE 42601). Note
+   that **session mode does not fix this particular trap**: it leaves prepared
+   statements enabled, so the only reason the constant is safe today is that
+   `init_db` opens one connection and runs the text once, keeping the count below
+   the threshold of 5. That is an accident of the current call pattern, not a
+   property of the code — so the constant must not be treated as a working
+   pattern to preserve. `init_db` becomes a migration version check (§3), and
+   until Phase 2 lands leave the constant in a single parameterless `execute()`
+   call and never add parameters to it.
+6. **`connect_timeout`** (libpq, accepted in the DSN or as a kwarg). Without it
+   libpq waits *indefinitely*, so a remote provider's outage becomes a hung
+   request thread rather than a fast `psycopg.errors.ConnectionTimeout`. This is
+   a hard prerequisite for a remote database in a way it was not for a local
+   socket.
+7. **`sslmode=require` minimum.** libpq defaults to `prefer`, which silently
+   falls back to plaintext. `verify-full` + `sslrootcert` once we hold the
+   project CA.
+8. **`application_name`, with a caveat.** It is worth setting (PgBouncer tracks
+   it as a startup parameter), but do not rely on it for attribution: Supavisor
+   connects upstream as `application_name = "Supavisor"` and periodically sends
+   its own `ParameterStatus` heartbeat, and `set_application_name` is refused in
+   transaction mode. Our name may not appear in `pg_stat_activity` at all.
+9. **Keep the `with conn.transaction():` ordering.** In `upsert_items` it is the
+   *first* statement on a fresh connection, so it becomes a real `BEGIN`/`COMMIT`
+   that pins one backend. If it ever ran after an implicit transaction had
+   opened, `psycopg` would silently downgrade it to `SAVEPOINT` and leave the
+   outer transaction open — which a pooler may then discard. This is load-bearing
+   ordering and deserves a comment plus an assertion.
+10. **Add `connect_timeout` and `prepare_threshold` regression tests.** Assert the
+    connection's `prepare_threshold` is what the selected mode requires, so the
+    setting cannot be silently dropped in a refactor.
+11. **Retire the `db_path` parameter** on the Postgres adapter's functions. It is
+    vestigial on this backend and is currently accepted-and-ignored in 11
    signatures.
 
 ## 3. Phased plan
@@ -418,7 +448,12 @@ count), two things become possible that are not today:
 - **Cross-replica single-flight.** `pg_try_advisory_lock` (session-scoped, so it
   requires session mode or a direct connection — see §2) elects one refresher.
   Two replicas then cost one upstream fetch, not two. This matters for honouring
-  source rate limits, which invariant 5 exists to protect.
+  source rate limits, which invariant 5 exists to protect. The lock must be taken
+  on a connection from our own application pool, held for the duration of the
+  refresh, and released on the same connection — in session mode the backend is
+  pinned to the client session, which is what makes the unlock land correctly.
+  `pg_advisory_xact_lock` is the alternative if we ever move to transaction mode,
+  but it is a poorer fit because a refresh is not a single transaction.
 - **Refresh on a schedule rather than on demand.** `pg_cron` + `pg_net`
   `http_post` to a token-protected `/api/refresh`
   ([pg_net](https://supabase.com/docs/guides/database/extensions/pg_net)) gives a

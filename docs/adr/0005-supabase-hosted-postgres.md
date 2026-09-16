@@ -54,7 +54,7 @@ recommends direct connections for persistent backends and it removes a hop.
 The migration is gated on two prerequisites that are valuable independently:
 
 1. **Connection pooling** (`psycopg_pool`) with an explicit `prepare_threshold`,
-   `sslmode=require`, and `application_name`.
+   `connect_timeout`, `sslmode=require`, and `application_name`.
 2. **Versioned migrations** (Supabase CLI `supabase/migrations/`), reducing
    `init_db()` from "create the schema at container start" to "assert the
    expected migration is applied". The multi-statement `SCHEMA` constant must not
