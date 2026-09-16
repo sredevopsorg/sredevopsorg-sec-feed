@@ -17,3 +17,13 @@ data:
   # Comma-separated allowed CORS origins; defaults to "*" (local dev).
   # CORS_ORIGINS: "https://feed.example.com"
   LOG_LEVEL: "INFO"
+  # Optional Postgres pool tuning (defaults shown). Applies only when
+  # DATABASE_URL is set (see secret.yaml). Prepared statements are off by
+  # default so the same image works over direct/session/transaction modes;
+  # set DB_PREPARE_THRESHOLD=5 only on a direct or session-mode connection.
+  # DB_POOL_MIN_SIZE: "1"
+  # DB_POOL_MAX_SIZE: "4"
+  # DB_CONNECT_TIMEOUT: "10"
+  # DB_APPLICATION_NAME: "security-feed"
+  # DB_SSLMODE: "require"
+  # DB_PREPARE_THRESHOLD: "5"

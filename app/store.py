@@ -38,6 +38,8 @@ class Storage(Protocol):
 
     def set_source_cursor(self, source_id: str, cursor: str, db_path: str = DB_PATH) -> None: ...
 
+    def close(self) -> None: ...
+
 
 if settings.database_url:
     from . import postgres_store as _backend  # noqa: E402
@@ -83,3 +85,7 @@ def get_source_cursor(source_id: str, db_path: str = DB_PATH) -> str | None:
 
 def set_source_cursor(source_id: str, cursor: str, db_path: str = DB_PATH) -> None:
     return _backend.set_source_cursor(source_id, cursor, db_path)
+
+
+def close() -> None:
+    return _backend.close()

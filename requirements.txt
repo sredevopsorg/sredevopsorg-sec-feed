@@ -3,3 +3,4 @@ uvicorn==0.52.4
 feedparser==6.0.14
 httpx==0.28.1
 psycopg[binary]==3.3.5
+psycopg-pool==3.3.1

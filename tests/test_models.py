@@ -29,5 +29,6 @@ def test_store_exposes_full_interface():
         "mark_alerted",
         "get_source_cursor",
         "set_source_cursor",
+        "close",
     ):
         assert callable(getattr(store, name)), name

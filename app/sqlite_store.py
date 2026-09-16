@@ -337,3 +337,7 @@ def set_source_cursor(source_id: str, cursor: str, db_path: str = DB_PATH) -> No
             "ON CONFLICT(source_id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at",
             (source_id, cursor, _now_iso()),
         )
+
+
+def close() -> None:
+    """No-op: SQLite connections are opened and closed per call."""
