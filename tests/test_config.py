@@ -1,4 +1,4 @@
-from app.config import Settings, settings
+from app.config import Settings, _bool, settings
 
 
 def test_settings_defaults():
@@ -7,7 +7,7 @@ def test_settings_defaults():
     assert s.sqlite_db_path.endswith("/data/feed.db")
     assert s.opensearch_url is None
     assert s.opensearch_index == "security-feed"
-    assert s.cors_origins == ("*",)
+    assert s.cors_origins == ()
     assert s.log_level == "INFO"
     assert s.smtp_port == 587
     assert s.alert_from == "security-feed@example.com"
@@ -17,6 +17,37 @@ def test_settings_defaults():
     assert s.db_connect_timeout == 10
     assert s.db_sslmode == "prefer"
     assert s.db_application_name == "security-feed"
+    assert s.rate_limit_per_minute == 120
+    assert s.rate_limit_trust_proxy is True
+    assert s.max_sse_subscribers == 100
+
+
+def test_settings_cors_denies_by_default():
+    """CORS fails closed unless an explicit allow-list is configured."""
+    assert Settings.from_env({}).cors_origins == ()
+    assert Settings.from_env({"CORS_ORIGINS": "*"}).cors_origins == ("*",)
+
+
+def test_settings_rate_limit_overrides():
+    s = Settings.from_env({
+        "RATE_LIMIT_PER_MINUTE": "0",
+        "RATE_LIMIT_TRUST_PROXY": "false",
+        "MAX_SSE_SUBSCRIBERS": "5",
+    })
+    assert s.rate_limit_per_minute == 0
+    assert s.rate_limit_trust_proxy is False
+    assert s.max_sse_subscribers == 5
+    # An invalid rate falls back to the default rather than breaking startup.
+    assert Settings.from_env({"RATE_LIMIT_PER_MINUTE": "nope"}).rate_limit_per_minute == 120
+
+
+def test_bool_parsing():
+    assert _bool(None) is False
+    assert _bool(None, True) is True
+    for truthy in ("1", "true", "TRUE", "yes", "on", " On "):
+        assert _bool(truthy) is True
+    for falsy in ("0", "false", "no", "off", ""):
+        assert _bool(falsy) is False
 
 
 def test_settings_csv_parsing():

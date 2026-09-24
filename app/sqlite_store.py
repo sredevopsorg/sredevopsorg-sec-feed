@@ -108,6 +108,16 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _escape_like(value: str) -> str:
+    """Escape LIKE wildcards so user input matches literally.
+
+    The query is still parameterized (no injection risk); this only stops a
+    ``%`` or ``_`` in the search box from broadening the match. Callers must
+    declare ``ESCAPE '\\'`` in the SQL clause.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def upsert_items(items: list[FeedItem], db_path: str = DB_PATH) -> int:
     """Insert or update feed items. Returns the number of rows touched."""
     if not items:
@@ -218,8 +228,8 @@ def query_feed(tag: str | None = None, severity: str | None = None, limit: int =
     if live_count > 0:
         clauses.append("is_sample = 0")
     if tag:
-        clauses.append("tags LIKE ?")
-        params.append(f'%"{tag}"%')
+        clauses.append("tags LIKE ? ESCAPE '\\'")
+        params.append(f'%"{_escape_like(tag)}"%')
     if severity:
         clauses.append("severity = ?")
         params.append(severity)
@@ -301,18 +311,21 @@ def search_feed(q: str, tag: str | None = None, severity: str | None = None, lim
     """Fallback search over title, summary, source, and CVE ids."""
     if not q:
         return query_feed(tag=tag, severity=severity, limit=limit, db_path=db_path)
-    like = f"%{q}%"
+    like = f"%{_escape_like(q)}%"
     clauses: list[str] = []
     params: list[Any] = []
     with _connect(db_path) as conn:
         live_count = conn.execute("SELECT COUNT(*) FROM feed_items WHERE is_sample=0").fetchone()[0]
     if live_count > 0:
         clauses.append("is_sample = 0")
-    clauses.append("(title LIKE ? OR summary LIKE ? OR source LIKE ? OR cves LIKE ?)")
+    clauses.append(
+        "(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' "
+        "OR source LIKE ? ESCAPE '\\' OR cves LIKE ? ESCAPE '\\')"
+    )
     params.extend([like, like, like, like])
     if tag:
-        clauses.append("tags LIKE ?")
-        params.append(f'%"{tag}"%')
+        clauses.append("tags LIKE ? ESCAPE '\\'")
+        params.append(f'%"{_escape_like(tag)}"%')
     if severity:
         clauses.append("severity = ?")
         params.append(severity)

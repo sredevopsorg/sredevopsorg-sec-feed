@@ -14,12 +14,19 @@ data:
   # opensearch.yaml to the kustomization to enable it. Without it, /api/search
   # falls back to SQL (Postgres ILIKE).
   # OPENSEARCH_URL: "http://opensearch:9200"
-  # Comma-separated allowed CORS origins; defaults to "*" (local dev).
+  # Comma-separated allowed CORS origins. Unset (the default) denies all
+  # cross-origin calls; the bundled frontend is same-origin, so set this only
+  # when hosting the frontend on a different origin.
   # CORS_ORIGINS: "https://feed.example.com"
+  # Rate limiting / SSE tuning (defaults shown). 0 disables each limit.
+  # RATE_LIMIT_PER_MINUTE: "120"
+  # RATE_LIMIT_TRUST_PROXY: "true"
+  # MAX_SSE_SUBSCRIBERS: "100"
   LOG_LEVEL: "INFO"
   # Optional Postgres pool tuning (defaults shown). Applies only when
-  # DATABASE_URL is set (see secret.yaml). Prepared statements are off by
-  # default so the same image works over direct/session/transaction modes;
+  # DATABASE_URL is set (see secret.example.yaml; create the real Secret
+  # out-of-band — it is not applied by kustomize). Prepared statements are off
+  # by default so the same image works over direct/session/transaction modes;
   # set DB_PREPARE_THRESHOLD=5 only on a direct or session-mode connection.
   # DB_POOL_MIN_SIZE: "1"
   # DB_POOL_MAX_SIZE: "4"

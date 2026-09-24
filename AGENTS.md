@@ -16,6 +16,8 @@ container-first (Docker/Podman); a host Python install is optional.
 
 ```bash
 # Development (builds the web + api images from source; UI on :8080, API on :8000)
+# Compose fails closed without credentials: copy the template once first.
+cp .env.example .env   # then set POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
 docker compose up --build
 
 # Run tests (host)
@@ -60,18 +62,23 @@ app/ossf.py         OpenSSF Malicious Packages source (GitHub API + cursor)
 app/store.py       Storage facade/port (selects sqlite or postgres backend)
 app/sqlite_store.py    SQLite storage adapter
 app/postgres_store.py  PostgreSQL storage adapter
-app/events.py      SSE pub/sub broker
+app/events.py      SSE pub/sub broker (capped subscriber count)
+app/ratelimit.py   In-process fixed-window request rate limiting
 app/alerts.py      Discord / Slack / email / log alerts for urgent items
 frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step);
-                   Dockerfile + nginx.conf serve it as non-root nginx on 8080
+                   Dockerfile + nginx.conf + security-headers.conf serve it as
+                   non-root nginx on 8080
 tests/             Unit tests: feed/enrichment, models, store, search, config, HTTP
-                   policy, API, pipeline, OSV/OSSF, alerts
+                   policy, API, pipeline, OSV/OSSF, alerts, rate limiting
 docs/              Architecture review (docs/architecture.md) + ADRs (docs/adr/)
-deploy/k8s/        Kubernetes manifests (api, frontend; postgres/PDB/Ingress/OpenSearch
-                   ship commented out of kustomization.yaml)
+deploy/k8s/        Kubernetes manifests (api, frontend, NetworkPolicy;
+                   postgres/PDB/Ingress/OpenSearch ship commented out of
+                   kustomization.yaml; secret.example.yaml is a template and is
+                   NOT applied by kustomize)
 .github/workflows/ CI (pytest on Python 3.13), CodeQL, container image builds
-docker-compose.yml           Base services (local build; UI host port 8080)
-docker-compose.prod.yml      Production overrides (published GHCR images)
+docker-compose.yml           Base services (local build; UI host port 8080; reads .env)
+docker-compose.prod.yml      Production overrides (digest-pinned GHCR images)
+.env.example                 Template for the gitignored .env (Postgres credentials)
 requirements-dev.txt         Test/dev dependencies
 ```
 
@@ -129,6 +136,23 @@ requirements-dev.txt         Test/dev dependencies
 14. **The search index must match the SQL view.** Sample rows are never
     indexed, and `search.sync_archive()` purges them as soon as live rows
     exist, so `/api/search` cannot return rows the SQL paths hide.
+15. **CORS fails closed.** `CORS_ORIGINS` defaults to empty, so the API denies
+    every cross-origin caller. Only add an allow-list when the frontend is
+    genuinely hosted on another origin, and update the frontend CSP
+    `connect-src` to match.
+16. **Public read endpoints stay bounded.** `/api/search` and `/api/events`
+    carry the `app.ratelimit` dependency (per-process, `RATE_LIMIT_PER_MINUTE`,
+    `0` disables), and `Broker.subscribe()` refuses new SSE subscribers past
+    `MAX_SSE_SUBSCRIBERS`, returning `503`. Do not add unbounded work to those
+    routes.
+17. **Production images are digest-pinned and credentials never live in git.**
+    Deployments/Compose/Dockerfiles reference `tag@sha256:…` (bump deliberately);
+    Compose reads Postgres credentials from the gitignored `.env` and fails
+    closed without them, and `deploy/k8s/secret.example.yaml` is a placeholder
+    template that is intentionally **not** referenced by `kustomization.yaml`.
+18. **Search input is escaped, not interpolated.** `%`/`_` in `/api/search`
+    are escaped before being wrapped in `%...%`; keep both storage adapters in
+    step and keep queries parameterized.
 
 ## Feed item contract
 

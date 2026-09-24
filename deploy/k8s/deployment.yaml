@@ -34,32 +34,33 @@ spec:
       # initContainers:
       #   # Wait for PostgreSQL and ensure the application database exists.
       #   # The postgres image only creates POSTGRES_DB on first init, so check
-      #   # the always-present `postgres` maintenance DB and create `feed` if it
-      #   # is missing (e.g. a reused/stale volume).
+      #   # the always-present `postgres` maintenance DB and create the app DB
+      #   # if it is missing (e.g. a reused/stale volume). POSTGRES_USER /
+      #   # POSTGRES_DB come from the Secret; Kubernetes expands `$(VAR)` in the
+      #   # command below.
       #   - name: wait-for-postgres
-      #     image: postgres:16-alpine
-      #     env:
-      #       - name: PGPASSWORD
-      #         valueFrom:
-      #           secretKeyRef:
-      #             name: security-feed-api-secrets
-      #             key: POSTGRES_PASSWORD
+      #     image: docker.io/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+      #     envFrom:
+      #       - secretRef:
+      #           name: security-feed-api-secrets
       #     command:
       #       - sh
       #       - -c
       #       - |
-      #         until pg_isready -h postgres -p 5432 -U feed -d postgres; do
+      #         until pg_isready -h postgres -p 5432 -U "$(POSTGRES_USER)" -d postgres; do
       #           echo "waiting for postgres..."
       #           sleep 2
       #         done
-      #         psql -h postgres -p 5432 -U feed -d postgres -tAc \
-      #           "SELECT 1 FROM pg_database WHERE datname = 'feed'" | grep -q 1 || \
-      #         psql -h postgres -p 5432 -U feed -d postgres -c "CREATE DATABASE feed"
+      #         psql -h postgres -p 5432 -U "$(POSTGRES_USER)" -d postgres -tAc \
+      #           "SELECT 1 FROM pg_database WHERE datname = '$(POSTGRES_DB)'" | grep -q 1 || \
+      #         psql -h postgres -p 5432 -U "$(POSTGRES_USER)" -d postgres -c "CREATE DATABASE $(POSTGRES_DB)"
       containers:
         - name: api
-          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:main
-          # Pin to a version tag or digest in production for reproducibility.
-          imagePullPolicy: Always
+          # Digest-pinned for reproducibility. To move to a newer release,
+          # resolve the digest of the tag you want and replace the sha256:
+          #   docker buildx imagetools inspect ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
+          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:api@sha256:11017f19064a35e235b72bd9c49b5a41a22e9a7292d68c3583f649a5ae5f4a03
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
               name: http
@@ -68,6 +69,9 @@ spec:
             capabilities:
               drop:
                 - ALL
+            # The root filesystem is immutable; the app writes only to the
+            # /app/data PVC and to /tmp (emptyDir mounted below).
+            readOnlyRootFilesystem: true
           envFrom:
             - configMapRef:
                 name: security-feed-api-config
@@ -101,7 +105,11 @@ spec:
           volumeMounts:
             - name: feed-data
               mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: feed-data
           persistentVolumeClaim:
             claimName: security-feed-api-data
+        - name: tmp
+          emptyDir: {}

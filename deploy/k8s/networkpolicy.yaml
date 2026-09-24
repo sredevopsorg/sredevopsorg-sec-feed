@@ -1,0 +1,81 @@
+# Ingress-only NetworkPolicies.
+#
+# They restrict the backend components to the traffic they actually need and
+# leave egress (and every pod not selected below) untouched, so enabling them
+# cannot cut off DNS, outbound source fetching, or the Ingress controller.
+#
+# Caveat: enforcement requires a CNI that implements NetworkPolicy (Calico,
+# Cilium, ...); on a plugin without support these objects are simply ignored.
+# If kubelet health probes start failing after enabling them, this is the first
+# file to drop from kustomization.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: security-feed-api-ingress
+  labels:
+    app: security-feed-api
+spec:
+  podSelector:
+    matchLabels:
+      app: security-feed-api
+      component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the frontend pod may call the API (it reverse-proxies /api).
+    - from:
+        - podSelector:
+            matchLabels:
+              app: security-feed-web
+              component: web
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: security-feed-postgres-ingress
+  labels:
+    app: security-feed-api
+spec:
+  podSelector:
+    matchLabels:
+      app: security-feed-api
+      component: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the API pod may reach PostgreSQL.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: security-feed-api
+              component: api
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: security-feed-opensearch-ingress
+  labels:
+    app: security-feed-api
+spec:
+  podSelector:
+    matchLabels:
+      app: security-feed-api
+      component: opensearch
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the API pod may reach OpenSearch (when that component is enabled).
+    - from:
+        - podSelector:
+            matchLabels:
+              app: security-feed-api
+              component: api
+      ports:
+        - protocol: TCP
+          port: 9200

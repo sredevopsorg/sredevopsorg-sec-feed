@@ -44,6 +44,17 @@ def test_search_feed(tmp_path):
     assert any("runc" in r["title"].lower() or "runc" in r["summary"].lower() for r in rows)
 
 
+def test_search_feed_escapes_like_wildcards(tmp_path):
+    """A bare % or _ must not broaden the match to every row."""
+    db = str(tmp_path / "feed.db")
+    init_db(db)
+    upsert_items([make_item("x", "Runaway advisory"), make_item("y", "Discount 50% off")], db)
+    assert search_feed("_", limit=10, db_path=db) == []
+    # ...but a literal '%' still matches the row that contains it.
+    assert [r["id"] for r in search_feed("%", limit=10, db_path=db)] == ["y"]
+    assert [r["id"] for r in search_feed("runaway", limit=10, db_path=db)] == ["x"]
+
+
 def test_alerted_items(tmp_path):
     db = str(tmp_path / "feed.db")
     init_db(db)

@@ -38,6 +38,13 @@ def _opt_int(value: str | None) -> int | None:
         return None
 
 
+def _bool(value: str | None, default: bool = False) -> bool:
+    """Parse a boolean env value ("1"/"true"/"yes"/"on" are true)."""
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     # Storage
@@ -55,6 +62,10 @@ class Settings:
     opensearch_index: str
     # HTTP / CORS
     cors_origins: tuple[str, ...]
+    # Rate limiting / SSE fan-out
+    rate_limit_per_minute: int
+    rate_limit_trust_proxy: bool
+    max_sse_subscribers: int
     # Logging
     log_level: str
     # OpenSSF Malicious Packages source
@@ -83,7 +94,12 @@ class Settings:
             db_application_name=env.get("DB_APPLICATION_NAME") or "security-feed",
             opensearch_url=env.get("OPENSEARCH_URL") or None,
             opensearch_index=env.get("OPENSEARCH_INDEX", "security-feed"),
-            cors_origins=_csv(env.get("CORS_ORIGINS", "*")),
+            # Fail closed: deny cross-origin requests unless an allow-list is
+            # configured explicitly (the bundled frontend is same-origin).
+            cors_origins=_csv(env.get("CORS_ORIGINS")),
+            rate_limit_per_minute=_int(env.get("RATE_LIMIT_PER_MINUTE"), 120),
+            rate_limit_trust_proxy=_bool(env.get("RATE_LIMIT_TRUST_PROXY"), True),
+            max_sse_subscribers=_int(env.get("MAX_SSE_SUBSCRIBERS"), 100),
             log_level=env.get("LOG_LEVEL", "INFO"),
             github_token=env.get("GITHUB_TOKEN") or None,
             discord_webhook_url=env.get("DISCORD_WEBHOOK_URL") or None,
