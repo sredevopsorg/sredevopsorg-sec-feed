@@ -437,7 +437,57 @@ async def _fetch_redhat(source: Source, client: httpx.AsyncClient) -> list[FeedI
     return items
 
 
-async def _fetch_source(source: Source) -> list[FeedItem]:
+# Connect-phase failures to upstream hosts are intermittently transient: the
+# same deployment has reached a source and then failed to reach it minutes
+# later (a dropped SYN surfaces as ConnectTimeout, a reset as ConnectError).
+# One retry turns most of those back into a successful refresh. HTTP error
+# *responses* are deliberately never retried: a 4xx/5xx is the source's answer,
+# and retrying it would double our request rate against that source
+# (invariant 5).
+FETCH_ATTEMPTS = 2
+FETCH_RETRY_DELAY = 0.75  # seconds, multiplied by the attempt number
+
+
+def _error_detail(exc: BaseException) -> str:
+    """Return the first non-empty message in an exception's cause chain.
+
+    httpx re-raises httpcore's connect failures as its own classes without a
+    message, so ``str(exc)`` is empty exactly when the cause matters most: a
+    blackholed connection surfaces as a message-less ``ConnectTimeout``. The
+    errno or reason, when there is one, lives further down the chain.
+    """
+    node: BaseException | None = exc
+    for _ in range(5):
+        if node is None:
+            break
+        detail = str(node).strip()
+        if detail:
+            return detail
+        node = node.__cause__ or node.__context__
+    return ""
+
+
+def _describe_fetch_error(source: Source, exc: BaseException) -> str:
+    """One actionable line describing why a source could not be fetched.
+
+    Keeps the ``<id>: <ExceptionType>: <detail>`` shape the API has always
+    reported, but names the unreachable host instead of trailing off after an
+    empty colon when the exception carries no usable message of its own.
+    """
+    kind = type(exc).__name__
+    host = urllib.parse.urlsplit(source.url).netloc or source.url
+    if isinstance(exc, httpx.TimeoutException):
+        # anyio reports a deadline through a cancel scope whose message embeds
+        # a memory address ("Cancelled via cancel scope 0x7f75…"), which is
+        # noise; the exception type already names the phase that timed out.
+        return f"{source.id}: {kind} reaching {host}"
+    detail = _error_detail(exc)
+    if detail:
+        return f"{source.id}: {kind}: {detail}"
+    return f"{source.id}: {kind} reaching {host}"
+
+
+async def _fetch_source_once(source: Source) -> list[FeedItem]:
     if source.kind == "ossf-malicious":
         from . import ossf
 
@@ -451,6 +501,22 @@ async def _fetch_source(source: Source) -> list[FeedItem]:
         if source.kind == "redhat-api":
             return await _fetch_redhat(source, client)
     return []
+
+
+async def _fetch_source(source: Source) -> list[FeedItem]:
+    """Fetch one source, retrying once when the connection itself fails."""
+    last_exc: BaseException | None = None
+    for attempt in range(FETCH_ATTEMPTS):
+        try:
+            return await _fetch_source_once(source)
+        except httpx.TransportError as exc:
+            last_exc = exc
+            if attempt + 1 < FETCH_ATTEMPTS:
+                logger.info("Retrying %s after %s", source.id, type(exc).__name__)
+                await asyncio.sleep(FETCH_RETRY_DELAY * (attempt + 1))
+    # The loop either returns or leaves an exception to re-raise.
+    assert last_exc is not None
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +561,7 @@ async def fetch_all() -> tuple[list[FeedItem], list[str]]:
     items: list[FeedItem] = []
     for source, result in zip(SOURCES, results):
         if isinstance(result, BaseException):
-            errors.append(f"{source.id}: {type(result).__name__}: {result}")
+            errors.append(_describe_fetch_error(source, result))
             continue
         items.extend(result)
     if not items:

@@ -405,6 +405,15 @@ Example:
 curl 'http://localhost:8000/api/feed?tag=kubernetes&severity=critical&limit=20'
 ```
 
+The response carries `source_errors`: one line per source that could not be
+reached in the last refresh, shaped `<source-id>: <ExceptionType>: <detail>`.
+When the exception has no message of its own — httpx reports a blackholed
+connection as a message-less `ConnectTimeout` — the unreachable host is named
+instead, e.g. `debian: ConnectTimeout reaching www.debian.org`. The rest of the
+feed is unaffected: items from every source that answered are served as usual.
+A fetch is retried once when the *connection* fails; HTTP error responses
+(4xx/5xx) are never retried, so a source's own rate limiting is respected.
+
 ### `/api/items`
 
 Same filters as `/api/feed`, but reads the whole persistent archive instead of

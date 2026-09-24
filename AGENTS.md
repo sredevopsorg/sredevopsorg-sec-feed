@@ -98,7 +98,9 @@ requirements-dev.txt         Test/dev dependencies
 5. **Respect source rate limits and terms.** All HTTP calls must keep the
    current `USER_AGENT` and a bounded timeout: build clients through
    `app.http_client.client()`. `tests/test_http.py` fails if any other module
-   constructs an `httpx` client.
+   constructs an `httpx` client. A fetch retries at most once and only for
+   transport-level failures (`FETCH_ATTEMPTS` in `app/fetcher.py`); HTTP error
+   responses are never retried.
 6. **Keep tests passing.** Every change to parsing/enrichment should add or
    update a test in `tests/test_feed.py`.
 

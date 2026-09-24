@@ -2,6 +2,9 @@ import asyncio
 import contextlib
 import time
 
+import httpx
+import pytest
+
 from app import fetcher, pipeline
 from app.models import FeedItem
 from app.sources import Source
@@ -167,3 +170,134 @@ def test_fetch_all_falls_back_to_samples_when_empty(monkeypatch):
 
     assert items and all(item.is_sample for item in items)
     assert errors
+
+
+# ---------------------------------------------------------------------------
+# Source failures: actionable reporting and the transport-error retry
+# ---------------------------------------------------------------------------
+
+
+def test_describe_fetch_error_keeps_the_exception_detail():
+    source = Source(id="boom", name="BOOM", kind="rss", url="https://example.com/feed")
+
+    assert fetcher._describe_fetch_error(source, RuntimeError("network down")) == (
+        "boom: RuntimeError: network down"
+    )
+
+
+def test_describe_fetch_error_names_the_host_when_the_message_is_empty():
+    """A blackholed connection raises ConnectTimeout with an empty message.
+
+    httpx re-raises httpcore's connect failures without a message, which used
+    to render as a dangling colon in the UI ("debian: ConnectTimeout: ").
+    """
+    source = Source(
+        id="debian", name="Debian", kind="rss", url="https://www.debian.org/security/dsa"
+    )
+
+    assert fetcher._describe_fetch_error(source, httpx.ConnectTimeout("")) == (
+        "debian: ConnectTimeout reaching www.debian.org"
+    )
+
+
+def test_describe_fetch_error_falls_back_to_the_cause_chain():
+    """When the outer exception is blank, the underlying reason is reported."""
+    exc = httpx.ConnectError("")
+    exc.__cause__ = OSError("Network is unreachable")
+    source = Source(
+        id="ossf-malicious",
+        name="OpenSSF",
+        kind="ossf-malicious",
+        url="https://api.github.com/repos/ossf/malicious-packages",
+    )
+
+    assert fetcher._describe_fetch_error(source, exc) == (
+        "ossf-malicious: ConnectError: Network is unreachable"
+    )
+
+
+def test_describe_fetch_error_hides_cancel_scope_noise():
+    """anyio's deadline message embeds a memory address; do not leak it."""
+    exc = httpx.ConnectTimeout("")
+    exc.__cause__ = TimeoutError(
+        "Cancelled via cancel scope 0x7f75352420d0; reason: deadline exceeded"
+    )
+    source = Source(
+        id="debian", name="Debian", kind="rss", url="https://www.debian.org/security/dsa"
+    )
+
+    assert fetcher._describe_fetch_error(source, exc) == (
+        "debian: ConnectTimeout reaching www.debian.org"
+    )
+
+
+def test_fetch_source_retries_a_transport_failure(monkeypatch):
+    """One retry turns an intermittent connect failure into a good refresh."""
+    monkeypatch.setattr(fetcher, "FETCH_RETRY_DELAY", 0)
+    attempts = {"n": 0}
+
+    async def flaky(source):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise httpx.ConnectError("All connection attempts failed")
+        return [make_item(f"{source.id}-0")]
+
+    monkeypatch.setattr(fetcher, "_fetch_source_once", flaky)
+    source = Source(
+        id="debian", name="Debian", kind="rss", url="https://www.debian.org/security/dsa"
+    )
+
+    items = asyncio.run(fetcher._fetch_source(source))
+
+    assert attempts["n"] == 2
+    assert [item.id for item in items] == ["debian-0"]
+
+
+def test_fetch_source_does_not_retry_an_http_error_response(monkeypatch):
+    """A 4xx/5xx is the source's answer; retrying would double our rate."""
+    monkeypatch.setattr(fetcher, "FETCH_RETRY_DELAY", 0)
+    attempts = {"n": 0}
+
+    async def forbidden(source):
+        attempts["n"] += 1
+        request = httpx.Request("GET", source.url)
+        response = httpx.Response(403, request=request)
+        raise httpx.HTTPStatusError("403 Forbidden", request=request, response=response)
+
+    monkeypatch.setattr(fetcher, "_fetch_source_once", forbidden)
+    source = Source(
+        id="ossf-malicious",
+        name="OpenSSF",
+        kind="ossf-malicious",
+        url="https://api.github.com/repos/ossf/malicious-packages",
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(fetcher._fetch_source(source))
+
+    assert attempts["n"] == 1
+
+
+def test_fetch_all_reports_an_empty_transport_failure_with_its_host(monkeypatch):
+    """End to end: the message the frontend renders is actionable."""
+
+    async def blackholed(source):
+        raise httpx.ConnectTimeout("")
+
+    monkeypatch.setattr(fetcher, "_fetch_source", blackholed)
+    monkeypatch.setattr(
+        fetcher,
+        "SOURCES",
+        [
+            Source(
+                id="debian",
+                name="Debian",
+                kind="rss",
+                url="https://www.debian.org/security/dsa",
+            )
+        ],
+    )
+
+    _, errors = asyncio.run(fetcher.fetch_all())
+
+    assert errors == ["debian: ConnectTimeout reaching www.debian.org"]

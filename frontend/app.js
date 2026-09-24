@@ -106,8 +106,15 @@
     if (!errors) return;
     if (errors.length) {
       $errorNote.hidden = false;
-      $errorNote.textContent = "Some live sources are unreachable from this environment; showing cached data. " +
-        errors.slice(0, 3).join(" · ");
+      const noun = errors.length === 1 ? "source" : "sources";
+      const pronoun = errors.length === 1 ? "it" : "them";
+      const extra = errors.length > 3 ? ` (+${errors.length - 3} more)` : "";
+      // The feed is served from the store and stays current for every source
+      // that answered, so do not claim the whole page is stale.
+      $errorNote.textContent =
+        `${errors.length} live ${noun} could not be reached in the last refresh; ` +
+        `showing the most recent stored data for ${pronoun}. ` +
+        errors.slice(0, 3).join(" · ") + extra;
     } else {
       $errorNote.hidden = true;
     }
