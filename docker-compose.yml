@@ -1,6 +1,9 @@
 # Base services. For local development run `docker compose up --build` (UI on
 # http://localhost:8080, API on http://localhost:8000). For production run:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Credentials are not stored here: copy .env.example to .env and set
+# POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB first. `.env` is gitignored.
 services:
   # Frontend: static single-page app served by non-root nginx, reverse-proxying
   # /api to the backend so the browser keeps a single origin. To host the
@@ -25,8 +28,10 @@ services:
     container_name: api
     hostname: api
     environment:
-      # Self-hosted PostgreSQL (uncomment to use the local `postgres` service):
-      - DATABASE_URL=postgresql://feed:feed@postgres:5432/feed
+      # Self-hosted PostgreSQL. Credentials come from `.env` (see .env.example);
+      # the whole stack fails to start when they are missing. To run without
+      # PostgreSQL, comment out DATABASE_URL and the app falls back to SQLite.
+      - DATABASE_URL=postgresql://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
       # Hosted Supabase (session-mode pooler; copy the exact host from the
       # dashboard "Connect" dialog and use the `postgres.PROJECT-REF` user):
       # - DATABASE_URL=postgresql://postgres.PROJECT-REF:PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres
@@ -40,8 +45,14 @@ services:
       # DB_PREPARE_THRESHOLD=5 only on a direct or session-mode connection.
       # - DB_PREPARE_THRESHOLD=5
       # - SECURITY_FEED_DB=/app/data/feed.db
-      # Comma-separated allowed CORS origins; defaults to "*" (local dev).
+      # Comma-separated allowed CORS origins. Unset (the default) denies all
+      # cross-origin calls; the bundled frontend is same-origin, so only set
+      # this when hosting the frontend on a different origin.
       # - CORS_ORIGINS=https://feed.example.com,https://cdn.example.com
+      # Rate limiting / SSE tuning (defaults shown). 0 disables each limit:
+      # - RATE_LIMIT_PER_MINUTE=120
+      # - RATE_LIMIT_TRUST_PROXY=true
+      # - MAX_SSE_SUBSCRIBERS=100
       # Alerting channels (uncomment and set; prefer a secrets file in prod).
       # Discord is the primary channel:
       # - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
@@ -78,17 +89,18 @@ services:
       - sredevops-sec-feed
 
   postgres:
-    image: docker.io/postgres:16-alpine
+    image: docker.io/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     container_name: postgres
     environment:
-      - POSTGRES_USER=feed
-      - POSTGRES_PASSWORD=feed
-      - POSTGRES_DB=feed
+      # Required from `.env` (see .env.example); no default credentials ship here.
+      - POSTGRES_USER=${POSTGRES_USER:?set POSTGRES_USER in .env}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      - POSTGRES_DB=${POSTGRES_DB:?set POSTGRES_DB in .env}
     shm_size: 128mb
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U feed -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?set POSTGRES_USER in .env} -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -99,32 +111,38 @@ services:
   # One-shot helper: ensure the application database exists before the API
   # starts (the postgres image only creates POSTGRES_DB on first init).
   postgres-init:
-    image: docker.io/postgres:16-alpine
+    image: docker.io/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     container_name: postgres-init
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      - PGPASSWORD=feed
+      - PGPASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        psql -h postgres -U feed -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='feed'" | grep -q 1 || \
-        psql -h postgres -U feed -d postgres -c "CREATE DATABASE feed"
+        psql -h postgres -U ${POSTGRES_USER:?set POSTGRES_USER in .env} -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB:?set POSTGRES_DB in .env}'" | grep -q 1 || \
+        psql -h postgres -U ${POSTGRES_USER:?set POSTGRES_USER in .env} -d postgres -c "CREATE DATABASE ${POSTGRES_DB:?set POSTGRES_DB in .env}"
     # One-shot job: it must not be restarted after it succeeds.
     restart: "no"
     networks:
       - sredevops-sec-feed
 
+  # Optional search backend, local/dev only. The security plugin is disabled
+  # and there is no auth, so the port is published on loopback only and must
+  # not be exposed to untrusted networks (see deploy/k8s/networkpolicy.yaml for
+  # the Kubernetes-side restriction). Enable the security plugin or front it
+  # with auth before using it beyond local development.
   opensearch:
-    image: docker.io/opensearchproject/opensearch:2
+    image: docker.io/opensearchproject/opensearch:2@sha256:e321cb03c643874c42240458a618db56bc1e4fc143b10c41bec653542bc6851b
     profiles: ["search"]
     environment:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
       - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
     ports:
-      - "9200:9200"
+      # Loopback-only: never publish this unauthenticated service on 0.0.0.0.
+      - "127.0.0.1:9200:9200"
     volumes:
       - opensearch-data:/usr/share/opensearch/data
     healthcheck:

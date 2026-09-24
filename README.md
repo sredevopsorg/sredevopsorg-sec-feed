@@ -51,7 +51,9 @@ The frontend and backend are separate deployables: the backend is a pure JSON
 API (`/api/*`, `/health`) and the frontend is a static app served by nginx that
 reverse-proxies `/api` to the backend. They can also be hosted on different
 origins via `window.__API_BASE_URL__` (see `frontend/config.js`) plus the
-backend's `CORS_ORIGINS` setting.
+backend's `CORS_ORIGINS` setting. CORS **fails closed**: with `CORS_ORIGINS`
+unset, no cross-origin caller is allowed, so set it explicitly when the frontend
+is hosted on a different origin from the API.
 
 ## Sources
 
@@ -99,6 +101,7 @@ backend's `CORS_ORIGINS` setting.
 │   ├── sqlite_store.py   # SQLite storage adapter
 │   ├── postgres_store.py # PostgreSQL storage adapter
 │   ├── events.py         # SSE pub/sub broker
+│   ├── ratelimit.py      # In-process fixed-window rate limiting
 │   └── alerts.py         # Discord / Slack / email / log alerting
 ├── frontend/
 │   ├── index.html        # Single-page frontend (markup)
@@ -106,6 +109,7 @@ backend's `CORS_ORIGINS` setting.
 │   ├── app.js            # Frontend logic (consumes the JSON API)
 │   ├── config.js         # Runtime config (API base URL)
 │   ├── nginx.conf        # nginx config (serves the SPA, proxies /api)
+│   ├── security-headers.conf # CSP + Permissions-Policy snippet (included by nginx.conf)
 │   └── Dockerfile        # Frontend (nginx) image
 ├── tests/
 │   ├── test_feed.py      # Feed normalization / dedup logic
@@ -113,20 +117,26 @@ backend's `CORS_ORIGINS` setting.
 │   ├── test_ossf.py      # OpenSSF source
 │   ├── test_alerts.py    # Alert formatting
 │   ├── test_store.py     # SQLite persistence
+│   ├── test_postgres_store.py # PostgreSQL adapter (needs TEST_DATABASE_URL)
 │   ├── test_search.py    # Search document mapping
 │   ├── test_config.py    # Settings
 │   ├── test_models.py    # Domain model + storage selection
 │   ├── test_http.py      # Outbound HTTP policy (user agent + timeouts)
-│   ├── test_api.py       # API surface (routes, CORS)
+│   ├── test_api.py       # API surface (routes, CORS, rate limiting)
+│   ├── test_events.py    # SSE broker subscriber cap
+│   ├── test_ratelimit.py # Rate limiter
 │   └── test_pipeline.py  # Refresh pipeline
 ├── docs/
 │   ├── architecture.md   # Architecture review (C4) + delivery record
 │   └── adr/              # Architecture Decision Records
 ├── deploy/
-│   └── k8s/              # Kubernetes manifests (api, frontend, postgres, PDB, …)
+│   └── k8s/              # Kubernetes manifests (api, frontend, NetworkPolicy,
+│                         #   postgres/PDB/Ingress/OpenSearch optional;
+│                         #   secret.example.yaml is a template, not applied)
 ├── Dockerfile            # API image (non-root, production)
-├── docker-compose.yml    # Base services (local build)
-├── docker-compose.prod.yml # Production overrides (pinned images)
+├── docker-compose.yml    # Base services (local build; reads .env)
+├── docker-compose.prod.yml # Production overrides (digest-pinned images)
+├── .env.example          # Template for the gitignored .env
 ├── requirements.txt      # Runtime dependencies (pinned)
 ├── requirements-dev.txt  # Test/dev dependencies (pinned)
 ├── README.md
@@ -139,7 +149,11 @@ Only Docker (or Podman) is required — no host Python setup.
 
 ### Development
 
+Compose takes credentials from a local `.env` file (gitignored); create it once
+and set real values:
+
 ```bash
+cp .env.example .env   # then edit POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
 docker compose up --build
 ```
 
@@ -156,11 +170,13 @@ no hot reload: re-run `docker compose up --build` after changing code.
 For a faster edit/refresh loop, run the API on the host with `uvicorn --reload`
 (see [Run without containers](#run-without-containers-optional)) and serve
 `frontend/` with any static file server, pointing `window.__API_BASE_URL__` at
-<http://localhost:8000> (CORS defaults to `*`).
+<http://localhost:8000> and setting `CORS_ORIGINS=http://localhost:8080` on the
+API (cross-origin calls are denied by default).
 
 ### Production
 
 ```bash
+cp .env.example .env   # once, on the deploy host; set real credentials
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
@@ -168,8 +184,10 @@ This pulls the published `ghcr.io/...:web` and `ghcr.io/...:latest` images and
 runs them non-root with no source mounts. Run
 `docker compose -f docker-compose.yml -f docker-compose.prod.yml pull` (or add
 `--no-build`) first, so Compose cannot fall back to building the base file's
-`build:` contexts. The tags are pinned to a channel rather than a digest — use
-an immutable tag or digest if you need bit-for-bit reproducibility.
+`build:` contexts. The `api`, `web`, and `postgres` images are pinned by digest
+for reproducibility, so a new release is adopted only when its digest is
+updated in `docker-compose.prod.yml` (resolve one with
+`docker buildx imagetools inspect <image>:<tag>`).
 
 > The first feed refresh runs in the background on startup (single-flight) and
 > never blocks a request: every request is answered from the configured store,
@@ -188,7 +206,13 @@ origin from `window.__API_BASE_URL__` (set in `frontend/config.js`):
 - Leave it empty (`""`) to call the API on the same origin (the default when
   served behind a reverse proxy).
 - Set it to an absolute URL (e.g. `"https://feed.example.com"`) to host the
-  frontend separately from the API.
+  frontend separately from the API. That deployment also needs the API's
+  `CORS_ORIGINS` set and the frontend's CSP `connect-src` extended to include
+  that origin (`frontend/security-headers.conf`).
+
+The nginx image sends `Content-Security-Policy`, `Permissions-Policy`,
+`X-Content-Type-Options`, `X-Frame-Options`, and `Referrer-Policy` on every
+response.
 
 ### Run without containers (optional)
 
@@ -212,11 +236,22 @@ Channels are opt-in; Discord is the primary channel:
 
 Without any channel configured, urgent items are logged only.
 
+### HTTP hardening environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CORS_ORIGINS` | unset (deny all) | Comma-separated cross-origin allow-list; required only when the frontend is hosted on another origin |
+| `RATE_LIMIT_PER_MINUTE` | `120` | Per-client limit for `/api/search` and `/api/events`; `0` disables |
+| `RATE_LIMIT_TRUST_PROXY` | `true` | Key on the last `X-Forwarded-For` hop (set `false` when the API is directly reachable) |
+| `MAX_SSE_SUBSCRIBERS` | `100` | Concurrent `/api/events` subscribers before `503`; `0` disables the cap |
+
 ### PostgreSQL + OpenSearch via Compose
 
 `docker compose up --build` starts the frontend (`web`), the API (`api`), and
-PostgreSQL. By default the API uses SQLite; to use PostgreSQL, uncomment
-`DATABASE_URL=postgresql://feed:feed@postgres:5432/feed` in the `api` service.
+PostgreSQL, and the API connects to PostgreSQL using the credentials from
+`.env`. To run without PostgreSQL instead, comment out `DATABASE_URL` in the
+`api` service; the app then falls back to SQLite (`./data/feed.db` locally, or
+the `feed-data` volume in containers).
 
 To add OpenSearch search, run:
 
@@ -276,7 +311,7 @@ altogether.
 Requires `kubectl` and access to a cluster (Kustomize is built into `kubectl`).
 
 ```bash
-# Deploy the API, the frontend, the ConfigMap/Secret, and the SQLite PVC
+# Deploy the API, the frontend, the ConfigMap, the NetworkPolicies, and the SQLite PVC
 kubectl apply -k deploy/k8s
 
 # Watch the pods become ready (frontend `web` and API `api` pods)
@@ -295,28 +330,47 @@ Then open <http://localhost:8000>.
 **What gets deployed by default** (`deploy/k8s/kustomization.yaml`):
 
 - `security-feed-api` — the backend (Deployment + internal ClusterIP Service
-  `api` on port 8000). It runs as UID 10001 and sets `SECURITY_FEED_DB`
-  (`/app/data/feed.db`), so **the default store is SQLite** on the
-  `security-feed-api-data` PVC.
+  `api` on port 8000). It runs as UID 10001 with a read-only root filesystem
+  (`emptyDir` at `/tmp`) and sets `SECURITY_FEED_DB` (`/app/data/feed.db`), so
+  **the default store is SQLite** on the `security-feed-api-data` PVC. The image
+  is pinned by digest.
 - `security-feed-web` — the frontend (`nginxinc/nginx-unprivileged` Deployment
   running as UID 101 on port 8080 + ClusterIP Service on port 80). It
   reverse-proxies `/api` to the internal `api` Service, and the pod is
-  `runAsNonRoot` with all capabilities dropped, like the API pod.
+  `runAsNonRoot` with all capabilities dropped and a read-only root filesystem
+  (`emptyDir` mounts for the nginx cache/pid/tmp), like the API pod.
 - `security-feed-api-config` — ConfigMap for `LOG_LEVEL`, optional
-  `CORS_ORIGINS`, and optional alerting env vars. Put real Discord/Slack/email
-  webhook values in a Secret in production rather than the ConfigMap.
-- `security-feed-api-secrets` — Secret with Postgres credentials and
-  `DATABASE_URL` (only consumed when you enable PostgreSQL, below).
+  `CORS_ORIGINS`, optional rate-limit/SSE tuning, and optional alerting env
+  vars. Put real Discord/Slack/email webhook values in a Secret in production
+  rather than the ConfigMap.
+- `security-feed-*-ingress` — ingress-only NetworkPolicies restricting the API
+  to the frontend pod, PostgreSQL to the API pod, and OpenSearch to the API
+  pod. Egress is untouched. Enforcement needs a CNI that supports
+  NetworkPolicy; remove `- networkpolicy.yaml` to disable them.
+- `security-feed-api-secrets` — **not applied by kustomize**. This repo ships
+  only `secret.example.yaml` (placeholders), so create the real Secret
+  out-of-band before enabling PostgreSQL:
+
+  ```bash
+  kubectl -n security-feed create secret generic security-feed-api-secrets \
+    --from-literal=POSTGRES_USER=feed \
+    --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 24)" \
+    --from-literal=POSTGRES_DB=feed \
+    --from-literal=DATABASE_URL="postgresql://feed:PASSWORD@postgres:5432/feed"
+  ```
+
+  For GitOps, manage it with Sealed Secrets, the External Secrets Operator, or
+  SOPS instead of committing plaintext.
 
 **Optional components are shipped but commented out** of
 `deploy/k8s/kustomization.yaml`. Enable them deliberately:
 
 | Component | How to enable | Notes |
 |---|---|---|
-| PostgreSQL | Uncomment `- postgres.yaml` in `kustomization.yaml`, uncomment the `DATABASE_URL` env in `deployment.yaml`, and uncomment the `wait-for-postgres` init container next to it | Credentials come from `security-feed-api-secrets`; the PVC is `ReadWriteOnce` |
+| PostgreSQL | Uncomment `- postgres.yaml` in `kustomization.yaml`, uncomment the `DATABASE_URL` env in `deployment.yaml`, and uncomment the `wait-for-postgres` init container next to it | Credentials come from `security-feed-api-secrets` (created out-of-band, above); the PVC is `ReadWriteOnce` |
 | PodDisruptionBudgets | Uncomment `- pdb.yaml` | `minAvailable: 1` with `replicas: 1` blocks node drains, so raise the API/web replicas to at least 2 first |
 | Ingress | Uncomment `- ingress.yaml` and set a real host + TLS | Needs an Ingress controller; the sample host is `security-feed.example.com` |
-| OpenSearch | Uncomment `- opensearch.yaml` and `OPENSEARCH_URL` in `configmap.yaml` | Without it, `/api/search` falls back to SQL (Postgres `ILIKE`), so search needs no extra infrastructure |
+| OpenSearch | Uncomment `- opensearch.yaml` and `OPENSEARCH_URL` in `configmap.yaml` | Without it, `/api/search` falls back to SQL (Postgres `ILIKE`), so search needs no extra infrastructure. Requires `vm.max_map_count >= 262144` on the node, and runs without auth (ingress is restricted to the API pod by the NetworkPolicy) |
 
 The `security-feed-api-data` PVC uses the cluster's default StorageClass.
 Set `storageClassName` in `deploy/k8s/pvc.yaml` if your cluster requires an
@@ -372,7 +426,23 @@ the live cache (default `limit` 100, max 1000).
 | `limit` | int | `50` | Max items (1–200) |
 
 The response adds `backend` (`opensearch` or `sql`) so callers can tell which
-engine answered.
+engine answered. A `%` or `_` in `q` is escaped, so it matches literally instead
+of acting as a SQL wildcard.
+
+### Rate limiting
+
+`/api/search` and `/api/events` are rate limited per client (default 120
+requests/minute; `RATE_LIMIT_PER_MINUTE=0` disables it). Over the limit returns
+`429 Too Many Requests` with a `Retry-After` header.
+
+`/api/events` also caps concurrent subscribers (default 100) and returns
+`503 Service Unavailable` with `Retry-After: 30` when the cap is reached.
+
+The limiter is in-process, so with N API replicas the effective limit is N ×
+`RATE_LIMIT_PER_MINUTE`. The client key is the last `X-Forwarded-For` hop by
+default, which the bundled nginx appends and a client cannot forge; set
+`RATE_LIMIT_TRUST_PROXY=false` when the API is reachable directly (for example
+through Compose's published port 8000) so the socket peer is used instead.
 
 ### Feed item schema
 
@@ -485,33 +555,48 @@ Reviewed: app code, Dockerfiles, docker-compose, Kubernetes manifests, GitHub Ac
 
 Legend: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low / hardening
 
+> **Status:** the code, container, Compose, and Kubernetes items below are
+> resolved in this change. The four GitHub Actions items remain open — workflow
+> files were deliberately out of scope here, so no `.github/workflows/` file was
+> modified.
+
 ---
 
 ### Sprint 1 — Critical / High
 
-- [ ] 🔴 **Remove hardcoded Postgres credentials from `deploy/k8s/secret.yaml`**
-  `stringData` currently ships real values `feed`/`feed`/`feed` and a matching
-  `DATABASE_URL`. Replace with a placeholder + `kubectl create secret`
-  instructions, or adopt Sealed Secrets / External Secrets Operator / SOPS so
-  real credentials never live in git.
+- [x] 🔴 **Remove hardcoded Postgres credentials from `deploy/k8s/secret.yaml`**
+  `stringData` shipped real values `feed`/`feed`/`feed` and a matching
+  `DATABASE_URL`. **Resolved:** the manifest is now
+  `deploy/k8s/secret.example.yaml`, holds only `REPLACE_ME` placeholders, and is
+  excluded from `kustomization.yaml` so `kubectl apply -k` neither applies
+  placeholders nor clobbers a real Secret. The file header, README, and
+  AGENTS.md document creating it with `kubectl create secret`, or adopting
+  Sealed Secrets / External Secrets Operator / SOPS so real credentials never
+  live in git.
 
-- [ ] 🔴 **Stop shipping default Postgres credentials in `docker-compose.yml` / `docker-compose.prod.yml`**
-  Move `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` into a gitignored
-  `.env` (ship `.env.example` instead), or generate random credentials on
-  first run. At minimum, add a prominent "dev-only, rotate before prod" note.
+- [x] 🔴 **Stop shipping default Postgres credentials in `docker-compose.yml` / `docker-compose.prod.yml`**
+  **Resolved:** `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` come from a
+  gitignored `.env` (shipped as `.env.example`) and Compose fails closed
+  (`${VAR:?…}`) when they are missing. The `postgres`, `postgres-init`, and
+  `api` services interpolate them; both quickstarts start with
+  `cp .env.example .env`, and the sample values carry a rotate-before-prod note.
 
-- [ ] 🟠 **Add rate limiting to `/api/events` and `/api/search`**
-  No auth or rate limit exists on any route today. `/api/events` (SSE) in
-  particular allows unbounded concurrent connections — cap subscribers in
-  `app/events.py::Broker` and add request-rate limiting (e.g. slowapi /
-  starlette-limiter) to the public endpoints.
+- [x] 🟠 **Add rate limiting to `/api/events` and `/api/search`**
+  **Resolved:** `app/ratelimit.py` adds a dependency-free in-process fixed-window
+  limiter (default 120/min per client, `RATE_LIMIT_PER_MINUTE=0` disables it)
+  applied to `/api/search` and `/api/events`, returning `429` with a
+  `Retry-After` header. `app/events.py::Broker` now caps concurrent SSE
+  subscribers (`MAX_SSE_SUBSCRIBERS`, default 100) and `/api/events` returns
+  `503` when full. The limiter is per process, so N replicas allow N × the
+  limit; the README documents that and the proxy-keying tradeoff.
 
-- [ ] 🟠 **Fail closed on CORS instead of defaulting to `"*"`**
-  `app/config.py` and `app/main.py` default `CORS_ORIGINS` to `"*"`. Change
-  the production default to empty (deny cross-origin) or log a clear startup
-  warning whenever the app boots with `"*"` still set.
+- [x] 🟠 **Fail closed on CORS instead of defaulting to `"*"`**
+  **Resolved:** `CORS_ORIGINS` now defaults to empty, so `CORSMiddleware` denies
+  every cross-origin caller, and a clear startup warning is logged when `"*"` is
+  set explicitly. The separately-hosted-frontend path documents setting
+  `CORS_ORIGINS` (and extending CSP `connect-src`).
 
-- [ ] 🟠 **Trim GitHub Actions job permissions to least privilege**
+- [ ] 🟠 **Trim GitHub Actions job permissions to least privilege** — *deferred (workflow changes excluded)*
   `.github/workflows/multi-build.yaml` and `multi-build-front.yaml` grant
   `contents: write`, `issues: read`, `discussions: read`,
   `pull-requests: read`, `repository-projects: read`, `checks: write`,
@@ -523,59 +608,58 @@ Legend: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low / hardening
 
 ### Sprint 2 — Medium
 
-- [ ] 🟡 **Add container image vulnerability scanning to CI**
+- [ ] 🟡 **Add container image vulnerability scanning to CI** — *deferred (workflow changes excluded)*
   No Trivy/Grype step scans the built `api`/`web` images before pushing to
   GHCR. Add one to `multi-build.yaml` / `multi-build-front.yaml`, failing (or
   at least reporting) on critical/high CVEs.
 
-- [ ] 🟡 **Extend CodeQL to cover the frontend**
+- [ ] 🟡 **Extend CodeQL to cover the frontend** — *deferred (workflow changes excluded)*
   `.github/workflows/codeql.yml` only analyzes `python`. Add
   `javascript-typescript` to the language matrix so `frontend/app.js` gets
   static analysis coverage too.
 
-- [ ] 🟡 **Pin production images to digests, not mutable tags**
-  `docker-compose.prod.yml` and the k8s `Deployment`s reference
-  `:latest` / `:web` / `:main`. Pin to digests for reproducibility (the
-  README already flags this as a known gap). Also fix
-  `frontend/Dockerfile`: its comment claims a pinned digest, but the actual
-  `FROM` line uses the mutable tag `1.31.5-alpine` — make them match.
+- [x] 🟡 **Pin production images to digests, not mutable tags**
+  **Resolved:** `docker-compose.prod.yml`, the k8s Deployments, and both
+  Dockerfiles now reference `tag@sha256:…` digests (PostgreSQL and OpenSearch
+  included) with `imagePullPolicy: IfNotPresent`. The README documents the bump
+  procedure. `frontend/Dockerfile` pins `nginx-unprivileged:1.31.5-alpine` to its
+  digest, so its comment and `FROM` line now agree.
 
-- [ ] 🟡 **Harden OpenSearch when enabled**
-  `docker-compose.yml` and `deploy/k8s/opensearch.yaml` run OpenSearch with
-  `DISABLE_SECURITY_PLUGIN=true` and no auth. Enable the security plugin (or
-  restrict access via NetworkPolicy) before using this in anything beyond
-  local dev. The `privileged: true` init container (for `vm.max_map_count`)
-  should be replaced with a node-level sysctl where possible, or explicitly
-  accepted as a documented risk.
+- [x] 🟡 **Harden OpenSearch when enabled**
+  **Resolved:** Compose publishes the unauthenticated port on `127.0.0.1` only;
+  Kubernetes restricts ingress to the API pod via NetworkPolicy; and the
+  `privileged: true` init container was replaced by a documented node-level
+  `vm.max_map_count >= 262144` prerequisite. The security plugin stays disabled
+  for this optional local setup, which is stated in the manifests and README.
 
-- [ ] 🟡 **Add Kubernetes NetworkPolicies**
-  Postgres, OpenSearch, and the API are all ClusterIP-reachable by any pod in
-  the namespace today. Add NetworkPolicies restricting Postgres/OpenSearch
-  ingress to the API pod only, and the API to the frontend pod only.
+- [x] 🟡 **Add Kubernetes NetworkPolicies**
+  **Resolved:** `deploy/k8s/networkpolicy.yaml` (enabled by default) restricts
+  PostgreSQL and OpenSearch ingress to the API pod and the API to the frontend
+  pod; egress and unselected pods are untouched.
 
-- [ ] 🟡 **Set `readOnlyRootFilesystem: true`**
-  API and web `securityContext` already set `runAsNonRoot`, dropped
-  capabilities, and `seccompProfile: RuntimeDefault` — add
-  `readOnlyRootFilesystem: true` (with explicit `emptyDir` mounts for any
-  writable paths) to close the gap.
+- [x] 🟡 **Set `readOnlyRootFilesystem: true`**
+  **Resolved:** the API and web containers set `readOnlyRootFilesystem: true`,
+  with explicit `emptyDir` mounts for `/tmp` (API) and `/var/cache/nginx`,
+  `/var/run`, `/tmp` (web).
 
 ---
 
 ### Sprint 3 — Low / hardening
 
-- [ ] 🟢 **Add `Content-Security-Policy` and `Permissions-Policy` headers**
-  `frontend/nginx.conf` sets `X-Content-Type-Options`, `X-Frame-Options`, and
-  `Referrer-Policy` but no CSP. Frontend JS already escapes feed-derived
-  content carefully, so this is defense-in-depth against future regressions.
+- [x] 🟢 **Add `Content-Security-Policy` and `Permissions-Policy` headers**
+  **Resolved:** `frontend/security-headers.conf` (included by `nginx.conf` at the
+  server level and in every location that sets its own `add_header`) sends a
+  strict CSP (`default-src 'self'`, `frame-ancestors 'none'`, …) plus a
+  `Permissions-Policy`, and the frontend Dockerfile copies the snippet into the
+  image.
 
-- [ ] 🟢 **Escape `%` / `_` in search wildcards**
-  `search_feed()` in both `app/sqlite_store.py` and `app/postgres_store.py`
-  builds `LIKE`/`ILIKE` patterns from user input without escaping SQL
-  wildcard characters. Queries remain parameterized (no injection risk), but
-  unescaped `%`/`_` can broaden matches unexpectedly — escape them before
-  wrapping in `%...%`.
+- [x] 🟢 **Escape `%` / `_` in search wildcards**
+  **Resolved:** both adapters escape `\`, `%`, and `_` before wrapping the query
+  in `%...%` (`search_feed`, plus the SQLite tag filter), with `ESCAPE '\'` on
+  the SQLite clauses and PostgreSQL's default backslash escape otherwise. Tests
+  cover both adapters.
 
-- [ ] 🟢 **Pin `ci.yaml` actions to commit SHAs**
+- [ ] 🟢 **Pin `ci.yaml` actions to commit SHAs** — *deferred (workflow changes excluded)*
   `.github/workflows/ci.yaml` pins actions by tag (`@v7`, `@v5`), while the
   build workflows pin by commit SHA. Align `ci.yaml` with the same SHA-pinning
   practice for consistency and supply-chain safety.

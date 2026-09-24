@@ -59,7 +59,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          image: docker.io/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5432
@@ -69,12 +69,15 @@ spec:
                 name: security-feed-api-secrets
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "feed", "-d", "postgres"]
+              # `pg_isready` does not authenticate, but POSTGRES_USER comes from
+              # the Secret (expanded here by Kubernetes) so it need not be
+              # duplicated in the manifest.
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "postgres"]
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "feed", "-d", "postgres"]
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "postgres"]
             initialDelaySeconds: 15
             periodSeconds: 20
           resources:

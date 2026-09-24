@@ -8,7 +8,14 @@ resources:
   - frontend.yaml
   - pvc.yaml
   - configmap.yaml
-  - secret.yaml
+  - networkpolicy.yaml
+  # The credentials Secret is deliberately NOT applied by kustomize: this repo
+  # ships no real values and a placeholder Secret would clobber a real one.
+  # Create it out-of-band first (see secret.example.yaml):
+  #   kubectl -n security-feed create secret generic security-feed-api-secrets \
+  #     --from-literal=POSTGRES_USER=... --from-literal=POSTGRES_PASSWORD=... \
+  #     --from-literal=POSTGRES_DB=... --from-literal=DATABASE_URL=...
+  # - secret.yaml
   # - postgres.yaml
   # - pdb.yaml
   # Optional: uncomment to expose the frontend via an Ingress (needs an

@@ -12,6 +12,9 @@ __pycache__/
 # Runtime
 feeder.log
 
+# Local environment (credentials). Copy .env.example to .env.
+.env
+
 # Local database
 data/
 

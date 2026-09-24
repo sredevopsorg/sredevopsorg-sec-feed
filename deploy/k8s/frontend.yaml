@@ -50,8 +50,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: web
-          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web
-          imagePullPolicy: Always
+          # Digest-pinned for reproducibility. To move to a newer release,
+          # resolve the digest of the tag you want and replace the sha256:
+          #   docker buildx imagetools inspect ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web
+          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web@sha256:d920db5892a20d4fb817d394cc6cfc0ba306a89e575cad0d22f4a5ea43f81219
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
               name: http
@@ -60,6 +63,12 @@ spec:
             capabilities:
               drop:
                 - ALL
+            # The root filesystem is immutable. nginx-unprivileged writes its
+            # pid under /run (mounted at /var/run), its caches under
+            # /var/cache/nginx, and temp files under /tmp; all are emptyDirs.
+            # /etc/nginx/conf.d is deliberately left read-only: the image's
+            # entrypoint tolerates that and the served config is baked in.
+            readOnlyRootFilesystem: true
           readinessProbe:
             httpGet:
               path: /
@@ -79,3 +88,17 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

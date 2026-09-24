@@ -6,14 +6,22 @@ import asyncio
 import logging
 from typing import Any
 
+from .config import settings
+
 logger = logging.getLogger(__name__)
 
 
 class Broker:
-    def __init__(self) -> None:
+    def __init__(self, max_subscribers: int = 100) -> None:
+        # 0 (or negative) disables the cap; the README documents the knob.
+        self.max_subscribers = max_subscribers
         self.subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
-    def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
+    def subscribe(self) -> asyncio.Queue[dict[str, Any]] | None:
+        """Return a new subscriber queue, or None when the cap is reached."""
+        if self.max_subscribers > 0 and len(self.subscribers) >= self.max_subscribers:
+            logger.warning("SSE subscriber cap (%d) reached; refusing connection", self.max_subscribers)
+            return None
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=16)
         self.subscribers.add(q)
         return q
@@ -31,4 +39,4 @@ class Broker:
                 continue
 
 
-broker = Broker()
+broker = Broker(settings.max_sse_subscribers)

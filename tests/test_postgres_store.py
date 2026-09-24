@@ -97,6 +97,18 @@ def test_search_feed(pg):
     assert rows, "expected at least one runc match in the sample data"
 
 
+def test_search_feed_escapes_like_wildcards(pg):
+    """A bare % or _ must not broaden the match to every row."""
+    postgres_store.upsert_items([
+        make_item("x", "Runaway advisory"),
+        make_item("y", "Discount 50% off"),
+    ])
+    assert postgres_store.search_feed("_", limit=10) == []
+    # ...but a literal '%' still matches the row that contains it.
+    assert [r["id"] for r in postgres_store.search_feed("%", limit=10)] == ["y"]
+    assert [r["id"] for r in postgres_store.search_feed("runaway", limit=10)] == ["x"]
+
+
 def test_stats_shape(pg):
     postgres_store.seed_if_empty()
     s = postgres_store.stats()

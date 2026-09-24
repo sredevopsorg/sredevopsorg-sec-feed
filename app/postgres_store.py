@@ -180,6 +180,18 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _escape_like(value: str) -> str:
+    """Escape LIKE/ILIKE wildcards so user input matches literally.
+
+    The query is still parameterized (no injection risk); this only stops a
+    ``%`` or ``_`` in the search box from broadening the match. PostgreSQL's
+    default LIKE/ILIKE escape character is the backslash, and the pattern is a
+    bound parameter (so ``standard_conforming_strings`` is irrelevant), which
+    is why the SQL below needs no explicit ``ESCAPE`` clause.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def init_db(db_path: str = "") -> None:
     with _connection() as conn:
         for statement in (
@@ -329,7 +341,7 @@ def search_feed(q: str, tag: str | None = None, severity: str | None = None, lim
         return query_feed(tag=tag, severity=severity, limit=limit)
     clauses: list[str] = [_HIDE_SAMPLE]
     params: list[Any] = []
-    like = f"%{q}%"
+    like = f"%{_escape_like(q)}%"
     clauses.append("(title ILIKE %s OR summary ILIKE %s OR source ILIKE %s OR cves::text ILIKE %s)")
     params.extend([like, like, like, like])
     if tag:

@@ -4,17 +4,22 @@
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 # (Without `pull`, Compose rebuilds the base file's `build:` contexts when the
 # image is not present locally.)
+#
+# The `api`/`web` images are pinned to immutable digests for reproducibility.
+# To move to a newer release, look up the digest for the tag you want, e.g.:
+#   docker buildx imagetools inspect ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
+# then replace the sha256 below (Renovate can also be configured to bump these).
 services:
   web:
-    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web@sha256:d920db5892a20d4fb817d394cc6cfc0ba306a89e575cad0d22f4a5ea43f81219
     pull_policy: always
     restart: always
 
   api:
-    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:11017f19064a35e235b72bd9c49b5a41a22e9a7292d68c3583f649a5ae5f4a03
     pull_policy: always
     restart: always
 
   postgres:
-    image: docker.io/postgres:16-alpine
+    image: docker.io/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     restart: always

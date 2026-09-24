@@ -3,6 +3,10 @@
 # add "- opensearch.yaml" to kustomization.yaml and uncomment OPENSEARCH_URL
 # in configmap.yaml. The app falls back to SQL search (Postgres ILIKE) when
 # OPENSEARCH_URL is unset, so search works without this component.
+#
+# Prerequisites: the node must have vm.max_map_count >= 262144 (see the pod
+# spec below), and ingress is restricted to the API pods by networkpolicy.yaml.
+# The security plugin stays disabled (no auth) for this local/optional setup.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -54,19 +58,16 @@ spec:
       securityContext:
         # OpenSearch runs as UID 1000; grant the data volume to that group.
         fsGroup: 1000
-      initContainers:
-        # OpenSearch requires vm.max_map_count >= 262144. This privileged
-        # init container raises it on the node. If your cluster forbids
-        # privileged containers, set the sysctl node-wide instead and remove
-        # this init container.
-        - name: set-vm-max-map-count
-          image: busybox:1.36
-          securityContext:
-            privileged: true
-          command: ["sysctl", "-w", "vm.max_map_count=262144"]
+      # OpenSearch refuses to start unless vm.max_map_count >= 262144. Raise it
+      # at the node level before enabling this component, e.g. via a node
+      # bootstrap unit or the OS package default:
+      #   sysctl -w vm.max_map_count=262144
+      # This used to be a privileged init container; it was removed so the
+      # workload no longer needs a privileged pod. (A DaemonSet doing the same
+      # would itself require privileged: true, hence the node-level guidance.)
       containers:
         - name: opensearch
-          image: opensearchproject/opensearch:2
+          image: docker.io/opensearchproject/opensearch:2@sha256:e321cb03c643874c42240458a618db56bc1e4fc143b10c41bec653542bc6851b
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 9200
@@ -74,6 +75,10 @@ spec:
           env:
             - name: discovery.type
               value: single-node
+            # Dev-only default: the security plugin is disabled and there is no
+            # auth. Ingress is restricted to the API pods by
+            # deploy/k8s/networkpolicy.yaml; enable the security plugin (and
+            # certificates) before exposing OpenSearch beyond the cluster.
             - name: DISABLE_SECURITY_PLUGIN
               value: "true"
             - name: OPENSEARCH_JAVA_OPTS
