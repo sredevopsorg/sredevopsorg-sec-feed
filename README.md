@@ -478,3 +478,118 @@ syntax check used when editing it.
 Still deferred (not blocking): typed API response models (Pydantic), a shared
 row-mapping/sample-hiding helper for the two storage adapters instead of
 mirrored implementations, and a linter/formatter.
+
+## Security To-Do
+
+Reviewed: app code, Dockerfiles, docker-compose, Kubernetes manifests, GitHub Actions workflows.
+
+Legend: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low / hardening
+
+---
+
+### Sprint 1 — Critical / High
+
+- [ ] 🔴 **Remove hardcoded Postgres credentials from `deploy/k8s/secret.yaml`**
+  `stringData` currently ships real values `feed`/`feed`/`feed` and a matching
+  `DATABASE_URL`. Replace with a placeholder + `kubectl create secret`
+  instructions, or adopt Sealed Secrets / External Secrets Operator / SOPS so
+  real credentials never live in git.
+
+- [ ] 🔴 **Stop shipping default Postgres credentials in `docker-compose.yml` / `docker-compose.prod.yml`**
+  Move `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` into a gitignored
+  `.env` (ship `.env.example` instead), or generate random credentials on
+  first run. At minimum, add a prominent "dev-only, rotate before prod" note.
+
+- [ ] 🟠 **Add rate limiting to `/api/events` and `/api/search`**
+  No auth or rate limit exists on any route today. `/api/events` (SSE) in
+  particular allows unbounded concurrent connections — cap subscribers in
+  `app/events.py::Broker` and add request-rate limiting (e.g. slowapi /
+  starlette-limiter) to the public endpoints.
+
+- [ ] 🟠 **Fail closed on CORS instead of defaulting to `"*"`**
+  `app/config.py` and `app/main.py` default `CORS_ORIGINS` to `"*"`. Change
+  the production default to empty (deny cross-origin) or log a clear startup
+  warning whenever the app boots with `"*"` still set.
+
+- [ ] 🟠 **Trim GitHub Actions job permissions to least privilege**
+  `.github/workflows/multi-build.yaml` and `multi-build-front.yaml` grant
+  `contents: write`, `issues: read`, `discussions: read`,
+  `pull-requests: read`, `repository-projects: read`, `checks: write`,
+  `statuses: read`, `security-events: read` to build/push jobs. Reduce to
+  `contents: read`, `packages: write`, `id-token: write`, and
+  `attestations: write` only if attestation is actually generated.
+
+---
+
+### Sprint 2 — Medium
+
+- [ ] 🟡 **Add container image vulnerability scanning to CI**
+  No Trivy/Grype step scans the built `api`/`web` images before pushing to
+  GHCR. Add one to `multi-build.yaml` / `multi-build-front.yaml`, failing (or
+  at least reporting) on critical/high CVEs.
+
+- [ ] 🟡 **Extend CodeQL to cover the frontend**
+  `.github/workflows/codeql.yml` only analyzes `python`. Add
+  `javascript-typescript` to the language matrix so `frontend/app.js` gets
+  static analysis coverage too.
+
+- [ ] 🟡 **Pin production images to digests, not mutable tags**
+  `docker-compose.prod.yml` and the k8s `Deployment`s reference
+  `:latest` / `:web` / `:main`. Pin to digests for reproducibility (the
+  README already flags this as a known gap). Also fix
+  `frontend/Dockerfile`: its comment claims a pinned digest, but the actual
+  `FROM` line uses the mutable tag `1.31.5-alpine` — make them match.
+
+- [ ] 🟡 **Harden OpenSearch when enabled**
+  `docker-compose.yml` and `deploy/k8s/opensearch.yaml` run OpenSearch with
+  `DISABLE_SECURITY_PLUGIN=true` and no auth. Enable the security plugin (or
+  restrict access via NetworkPolicy) before using this in anything beyond
+  local dev. The `privileged: true` init container (for `vm.max_map_count`)
+  should be replaced with a node-level sysctl where possible, or explicitly
+  accepted as a documented risk.
+
+- [ ] 🟡 **Add Kubernetes NetworkPolicies**
+  Postgres, OpenSearch, and the API are all ClusterIP-reachable by any pod in
+  the namespace today. Add NetworkPolicies restricting Postgres/OpenSearch
+  ingress to the API pod only, and the API to the frontend pod only.
+
+- [ ] 🟡 **Set `readOnlyRootFilesystem: true`**
+  API and web `securityContext` already set `runAsNonRoot`, dropped
+  capabilities, and `seccompProfile: RuntimeDefault` — add
+  `readOnlyRootFilesystem: true` (with explicit `emptyDir` mounts for any
+  writable paths) to close the gap.
+
+---
+
+### Sprint 3 — Low / hardening
+
+- [ ] 🟢 **Add `Content-Security-Policy` and `Permissions-Policy` headers**
+  `frontend/nginx.conf` sets `X-Content-Type-Options`, `X-Frame-Options`, and
+  `Referrer-Policy` but no CSP. Frontend JS already escapes feed-derived
+  content carefully, so this is defense-in-depth against future regressions.
+
+- [ ] 🟢 **Escape `%` / `_` in search wildcards**
+  `search_feed()` in both `app/sqlite_store.py` and `app/postgres_store.py`
+  builds `LIKE`/`ILIKE` patterns from user input without escaping SQL
+  wildcard characters. Queries remain parameterized (no injection risk), but
+  unescaped `%`/`_` can broaden matches unexpectedly — escape them before
+  wrapping in `%...%`.
+
+- [ ] 🟢 **Pin `ci.yaml` actions to commit SHAs**
+  `.github/workflows/ci.yaml` pins actions by tag (`@v7`, `@v5`), while the
+  build workflows pin by commit SHA. Align `ci.yaml` with the same SHA-pinning
+  practice for consistency and supply-chain safety.
+
+---
+
+## Already in good shape (no action needed)
+
+- All SQL access is parameterized (SQLite and Postgres adapters) — no
+  injection risk found.
+- Frontend (`app.js`) escapes all feed-derived HTML and validates URLs
+  before turning them into links — no XSS found.
+- API and web containers already run non-root with dropped capabilities and
+  `seccompProfile: RuntimeDefault`.
+- Dependencies are exactly pinned in `requirements.txt`, and Renovate is
+  configured for automatic updates.
+- CodeQL and a `SECURITY.md` disclosure policy are already in place.
