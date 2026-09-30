@@ -4,7 +4,7 @@
 # The base image is pinned by tag *and* digest: the tag documents the intended
 # release, the digest guarantees the exact bits. To bump it:
 #   docker buildx imagetools inspect docker.io/nginxinc/nginx-unprivileged:1.31.5-alpine
-FROM docker.io/nginxinc/nginx-unprivileged:1.31.5-alpine@sha256:19c132c9ab02d3b783f478743dafc7a7f42e27aa7d2bdcbec1bb1128ca8f2a07
+FROM docker.io/nginxinc/nginx-unprivileged:1.31.6-alpine@sha256:26b0bf6fbf07297983cb341998d79c831508787de26627dd2a112321b9c3a4af
 
 COPY index.html styles.css app.js config.js /usr/share/nginx/html/
 COPY nginx.conf /etc/nginx/conf.d/default.conf
