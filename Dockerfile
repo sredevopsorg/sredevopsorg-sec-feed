@@ -2,7 +2,7 @@
 # Base image pinned by tag *and* digest for reproducibility; bump the digest
 # when upgrading Python (Renovate can do this):
 #   docker buildx imagetools inspect docker.io/python:3.13-slim
-FROM docker.io/python:3.13-slim@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b
+FROM docker.io/python:3.14-slim@sha256:0741d101873c12ab927e6f8653feb8862b9bd58771177acb1b885b95141f91b4
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
