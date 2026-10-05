@@ -5,17 +5,11 @@ on:
     branches:
       - main
     paths:
-      - frontend/
+      - "frontend/**"
       - .github/workflows/multi-build-front.yaml
     tags:
       - v*
   workflow_dispatch:
-    inputs:
-      manual-tag:
-        description: "Manual Tag"
-        required: true
-        default: "manual"
-        type: string
 
 env:
   # The name of the Docker image to be built and pushed to GHCR
