@@ -99,6 +99,14 @@ SOURCES: list[Source] = [
         kind="ossf-malicious",
         url="https://api.github.com/repos/ossf/malicious-packages",
         tags=frozenset({"malware", "supply-chain"}),
-        max_items=30,
+        max_items=10,
     ),
+    Source(
+        id="zeroday",
+        name="ZDI Published Advisories",
+        kind="rss",
+        url="https://www.zerodayinitiative.com/rss/published/",
+        tags=frozenset({"exploit", "zeroday"}),
+		max_items=10,
+	),  
 ]
