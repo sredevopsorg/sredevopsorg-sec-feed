@@ -16,7 +16,7 @@ services:
     restart: always
 
   api:
-    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:2cdbe925ed6989bde80a2636ac2f459a899d29d6d0ebe4c5e3f9fe9b79af58c3
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:52a8b3cbdba3492f3e7543125dec5d9a7111a862fc905f35c403aefe84d54078
     pull_policy: always
     restart: always
 
