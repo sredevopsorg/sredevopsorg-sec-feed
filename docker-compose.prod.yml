@@ -11,7 +11,7 @@
 # then replace the sha256 below (Renovate can also be configured to bump these).
 services:
   web:
-    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web@sha256:34723cfe4aeee818a7a09a9ba99bbfc5ac33242c2ec1bf7712ac290fab665bac
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web@sha256:a129d04fba6f93bfc1639139d707d47166300a82df35a6b4d3f03fe2844a2a0a
     pull_policy: always
     restart: always
 
