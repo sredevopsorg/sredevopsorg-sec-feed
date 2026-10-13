@@ -107,6 +107,14 @@ SOURCES: list[Source] = [
         kind="rss",
         url="https://www.zerodayinitiative.com/rss/published/",
         tags=frozenset({"exploit", "zeroday"}),
-		max_items=10,
+		max_items=5,
+	),
+    Source(
+        id="zeroday-upcoming",
+        name="ZDI Upcoming Advisories",
+        kind="rss",
+        url="https://www.zerodayinitiative.com/rss/upcoming/",
+        tags=frozenset({"exploit", "zeroday"}),
+		max_items=5,
 	),  
 ]
