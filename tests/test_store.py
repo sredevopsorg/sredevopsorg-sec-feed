@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.fetcher import FeedItem
-from app.store import init_db, mark_alerted, query_feed, search_feed, seed_if_empty, stats, unalerted_urgent_items, upsert_items
+from app.store import init_db, mark_alerted, ping, query_feed, search_feed, seed_if_empty, stats, unalerted_urgent_items, upsert_items
 
 
 def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = frozenset({"linux"}), cves: list[str] | None = None, severity: str = "high", urgent: bool = False, patch_status: str = "unknown", published: datetime | None = None) -> FeedItem:
@@ -102,3 +102,9 @@ def test_patch_status_roundtrip(tmp_path):
     rows = query_feed(limit=50, db_path=db)
     row = next(r for r in rows if r["id"] == "p")
     assert row["patch_status"] == "fixed"
+
+
+def test_ping(tmp_path):
+    db = str(tmp_path / "feed.db")
+    init_db(db)
+    assert ping(db) is True

@@ -1,19 +1,33 @@
 # Proposal — Supabase as the Postgres provider, and which Supabase features earn their place
 
-Status: **Partially implemented** (Phase 1 landed; Phases 2–5 proposed)
+Status: **Implemented** (Phases 0–3 landed 2026-10-17; Phase 4–5 remain optional)
 Date: 2026-09-16 (implementation update 2026-10-17)
-Supersedes: nothing. See [ADR-0005](./adr/0005-supabase-hosted-postgres.md) for the decision record.
+Supersedes: nothing. See [ADR-0005](./adr/0005-supabase-hosted-postgres.md) for the decision record and
+[ADR-0007](./adr/0007-schema-migrations-and-runtime-role.md) for the migration/role decision.
 
 > Every Supabase claim below was verified against the current official docs on
 > 2026-09-16 (URLs inline). Supabase ships breaking changes frequently, so
 > re-verify before implementing.
 >
-> **Implementation update (2026-10-17).** Phase 1 has landed: connection
-> pooling, single-predicate sample hiding, single-query `stats()`, single-
-> statement DDL, and Postgres adapter tests are all in the repository. The
-> "what we have today" findings in §1.1–1.3 describe the pre-Phase-1 state and
-> are retained as the rationale that motivated the change. The hosted cutover,
-> versioned migrations, least-privilege role, and backups remain proposed.
+> **Implementation update (2026-10-17).** Phase 0–3 have landed: connection
+> pooling, single-predicate sample hiding, single-query `stats()`, Postgres
+> adapter tests in CI, versioned migrations (`migrations/0001_baseline.sql` +
+> `app/migrate.py`), the hosted cutover, and the least-privilege `feed_app`
+> role. `/health` no longer queries the database; `/ready` does a cheap ping,
+> and `/api/stats` is cached. The "what we have today" findings in §1.1–1.3
+> describe the pre-migration state and are retained as rationale. Optional
+> Phase 4 (drop persisted sample rows) and cross-replica refresh coordination
+> (§4.4) remain open; the backup/PITR plan choice remains an operator decision.
+>
+> **Corrections from live verification:** Supavisor ignores libpq `options`
+> (the session reports `application_name=Supavisor` and the 2-minute server
+> default), so session guards are applied with an explicit committed `SET` in
+> the pool `configure` callback. Session mode *does* support prepared
+> statements; the Supabase overlay sets `DB_PREPARE_THRESHOLD=5`. The runtime
+> role is `feed_app`, not `postgres`. The migration tooling is a plain-SQL
+> Python runner rather than the Supabase CLI (ADR-0007), because this repo is
+> Python/container-first and CI already runs a Postgres service; the CLI
+> workflow remains a valid alternative.
 
 ## 1. What we actually have today (measured, not assumed)
 

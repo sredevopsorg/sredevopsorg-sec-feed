@@ -1,8 +1,8 @@
 # ADR-0005: Move the PostgreSQL backend to hosted Supabase
 
-- Status: **Partially implemented** (Phase 1 prerequisites landed; hosted cutover pending)
+- Status: **Implemented** (hosted cutover + migrations + least-privilege role landed 2026-10-17)
 - Date: 2026-09-16 (implementation update 2026-10-17)
-- Relates to: ADR-0003 (storage port and adapters)
+- Relates to: ADR-0003 (storage port and adapters), ADR-0007 (migrations and runtime role)
 
 ## Context
 
@@ -28,14 +28,24 @@ zero-setup fallback (ADR-0003). The Postgres adapter
   for this decision, and it is a gap by omission rather than a documented
   trade-off.
 
-> **Implementation update (2026-10-17).** Phase 1 has landed: the adapter uses
-> a lazy `psycopg_pool.ConnectionPool`, `_live_count()` is folded into a single
-> `_HIDE_SAMPLE` predicate, `stats()` is one SQL statement, `init_db` executes
-> single statements, and `tests/test_postgres_store.py` runs against a real
-> Postgres in CI. The connection-per-operation and 7-query bullets above are
-> retained as the pre-Phase-1 rationale. The hosted Supabase cutover, versioned
-> migrations, least-privilege role, backups, and cross-replica refresh lock
-> remain pending.
+> **Implementation update (2026-10-17).** The hosted cutover has landed. The
+> adapter uses a lazy `psycopg_pool.ConnectionPool` with committed per-session
+> timeouts, `_live_count()` is folded into a single `_HIDE_SAMPLE` predicate,
+> `stats()` is one SQL statement, and `tests/test_postgres_store.py` runs
+> against a real Postgres in CI. Schema creation moved out of API startup into
+> `migrations/` applied by `python -m app.migrate` (ADR-0007); the API verifies
+> the version only. The runtime connects as the DML-only `feed_app` role,
+> `anon`/`authenticated` grants are revoked, and `postgres` is used only by the
+> migration job. `/health` no longer queries the database; `/ready` does a
+> cheap ping. The connection-per-operation, 7-query and boot-DDL bullets above
+> are retained as the pre-migration rationale. Cross-replica refresh
+> coordination and PITR/backup plan selection remain open.
+>
+> Two corrections from live verification: Supavisor ignores libpq `options` and
+> overwrites `application_name`, so the session timeouts are applied with an
+> explicit committed `SET` in the pool `configure` callback; and session mode
+> does support prepared statements, so `DB_PREPARE_THRESHOLD=5` is enabled for
+> the Supabase overlay.
 
 The full analysis and evidence are in
 [`docs/supabase-migration-plan.md`](../supabase-migration-plan.md).
@@ -66,18 +76,21 @@ prerequisite — plus connection hardening:
 
 1. **Connection pooling** (`psycopg_pool`) with an explicit `prepare_threshold`
    (a Python kwarg only — libpq rejects it in the connection string; default
-   `None`), `connect_timeout`, `sslmode` (default `prefer`; `require` for
-   Supabase), and `application_name`.
-2. **Idempotent `init_db` retained, with the schema split into single
-   statements** and `pg_trgm`/indexes/RLS applied at startup. Versioned
-   migrations (Supabase CLI `supabase/migrations/`) are a **follow-up**, not a
-   prerequisite: the schema is three tables and `CREATE/ALTER ... IF NOT EXISTS`
-   is safe under concurrent startup.
+   `None`, `5` for the Supabase session-mode overlay), `connect_timeout`,
+   `sslmode` (`require` for Supabase; remote hosts with `prefer` are rejected at
+   startup), and committed per-session `statement_timeout` /
+   idle-transaction / lock timeouts. Supavisor ignores DSN `options` and
+   overwrites `application_name`, so those guards cannot come from the DSN.
+2. **Versioned migrations (ADR-0007).** `migrations/0001_baseline.sql` is applied
+   by `python -m app.migrate upgrade` as a one-shot job. `init_db()` verifies the
+   applied version and never creates DDL, so multiple replicas cannot race and
+   the runtime role does not need schema ownership.
 
-Runtime currently connects as the `postgres` role (which owns the tables and
-bypasses RLS); a least-privilege `feed_app` role is a follow-up. Tables are
-**not** exposed through the Data API, and RLS is enabled as defence in depth
-rather than the only control.
+Runtime connects as the DML-only `feed_app` role; the `postgres` role is used
+only by the migration job and the one-time `bootstrap-role` step. Migration 0001
+revokes `anon`/`authenticated` privileges (including `TRUNCATE`, which RLS does
+not cover) and future default privileges in `public`; tables are **not** exposed
+through the Data API, and RLS stays enabled as defence in depth.
 
 ## Consequences
 

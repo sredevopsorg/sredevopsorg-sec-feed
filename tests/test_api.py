@@ -91,6 +91,7 @@ def test_api_index_describes_endpoints():
         "version": "0.2.0-rc.1",
         "endpoints": [
             "/health",
+            "/ready",
             "/api/feed",
             "/api/items",
             "/api/stats",
@@ -99,3 +100,51 @@ def test_api_index_describes_endpoints():
             "/api/sources",
         ],
     }
+
+
+def test_health_does_not_query_the_database(monkeypatch):
+    """Liveness probes must not run the archive aggregate (the old hot query)."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("health must not call store.stats")
+
+    monkeypatch.setattr(main.store, "stats", boom)
+    result = asyncio.run(main.health())
+    assert result["status"] == "ok"
+    assert "db_total" not in result
+
+
+def test_ready_ok(monkeypatch):
+    monkeypatch.setattr(main.store, "ping", lambda *args, **kwargs: True)
+    assert asyncio.run(main.ready()) == {"status": "ready", "db": "ok"}
+
+
+def test_ready_returns_503_when_database_is_unavailable(monkeypatch):
+    def down(*args, **kwargs):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(main.store, "ping", down)
+    response = asyncio.run(main.ready())
+    assert response.status_code == 503
+    assert b'"not_ready"' in response.body
+    assert response.headers["Retry-After"] == "5"
+
+
+def test_stats_are_cached_between_calls(monkeypatch):
+    calls = []
+
+    def fake_stats():
+        calls.append(1)
+        return {"total": 1}
+
+    monkeypatch.setattr(main.store, "stats", fake_stats)
+    monkeypatch.setattr(main, "_STATS_CACHE", None)
+    assert asyncio.run(main.api_stats()) == {"total": 1}
+    assert asyncio.run(main.api_stats()) == {"total": 1}
+    assert len(calls) == 1
+
+
+def test_database_unavailable_is_mapped_to_503():
+    response = asyncio.run(main._database_unavailable(None, main.store.StoreUnavailable("down")))
+    assert response.status_code == 503
+    assert b"database unavailable" in response.body

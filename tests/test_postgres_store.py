@@ -3,22 +3,41 @@
 These run only when ``TEST_DATABASE_URL`` points at a real Postgres (CI provides
 a ``postgres:16-alpine`` service). They exercise the adapter directly, bypassing
 the ``store`` facade so the backend selection there is not affected.
+
+Safety: the fixture truncates tables, so a non-local DSN is refused unless
+``ALLOW_REMOTE_TEST_DB=1`` is set explicitly. Never point this at the hosted
+Supabase project.
 """
 
 from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import pytest
 
-from app import config, postgres_store
+from app import config, migrate, postgres_store
 from app.config import Settings
 from app.fetcher import FeedItem
 
 POSTGRES_DSN = os.environ.get("TEST_DATABASE_URL")
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "db", "database"}
 
-pytestmark = pytest.mark.skipif(not POSTGRES_DSN, reason="TEST_DATABASE_URL not set")
+
+def _is_local_dsn(dsn: str | None) -> bool:
+    if not dsn:
+        return False
+    host = (urlsplit(dsn).hostname or "").lower()
+    return host in _LOCAL_HOSTS or "." not in host
+
+
+_LOCAL_DSN = _is_local_dsn(POSTGRES_DSN) or os.environ.get("ALLOW_REMOTE_TEST_DB") == "1"
+
+pytestmark = pytest.mark.skipif(
+    not POSTGRES_DSN or not _LOCAL_DSN,
+    reason="TEST_DATABASE_URL must point at a local database (or set ALLOW_REMOTE_TEST_DB=1)",
+)
 
 
 def make_item(
@@ -47,8 +66,21 @@ def make_item(
 
 @pytest.fixture()
 def pg(monkeypatch):
-    monkeypatch.setattr(config, "settings", Settings.from_env({"DATABASE_URL": POSTGRES_DSN}))
+    monkeypatch.setattr(
+        config,
+        "settings",
+        Settings.from_env(
+            {
+                "DATABASE_URL": POSTGRES_DSN,
+                "DB_SSLMODE": "prefer",
+                "DB_STATEMENT_TIMEOUT_MS": "7000",
+                "DB_IDLE_TX_TIMEOUT_MS": "30000",
+                "DB_LOCK_TIMEOUT_MS": "5000",
+            }
+        ),
+    )
     postgres_store._reset_pool()
+    migrate.apply_pending(POSTGRES_DSN, wait_seconds=30)
     postgres_store.init_db()
     with postgres_store._connection() as conn:
         conn.execute("TRUNCATE TABLE feed_items, alerted_items, source_cursors")
@@ -139,3 +171,25 @@ def test_pool_kwargs(pg):
     assert pool.kwargs["prepare_threshold"] is None
     assert pool.kwargs["connect_timeout"] == 10
     assert pool.kwargs["application_name"] == "security-feed"
+    assert pool.timeout == 30.0
+    assert pool.max_idle == 600.0
+    assert pool.max_lifetime == 3600.0
+    assert pool.min_size == 1
+    assert pool.max_size == 4
+
+
+def test_pool_configure_applies_timeouts(pg):
+    """Supavisor ignores DSN `options`; the committed SET must survive."""
+    with postgres_store._connection() as conn:
+        row = conn.execute(
+            "SELECT current_setting('statement_timeout') AS st, "
+            "current_setting('idle_in_transaction_session_timeout') AS it, "
+            "current_setting('lock_timeout') AS lt"
+        ).fetchone()
+    assert row["st"] == "7s"
+    assert row["it"] == "30s"
+    assert row["lt"] == "5s"
+
+
+def test_ping(pg):
+    assert postgres_store.ping() is True

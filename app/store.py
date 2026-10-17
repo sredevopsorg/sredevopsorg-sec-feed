@@ -10,7 +10,27 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from .config import settings
+from .errors import SchemaNotMigrated, StoreUnavailable
 from .models import FeedItem
+
+__all__ = [
+    "DB_PATH",
+    "SchemaNotMigrated",
+    "Storage",
+    "StoreUnavailable",
+    "close",
+    "get_source_cursor",
+    "init_db",
+    "mark_alerted",
+    "ping",
+    "query_feed",
+    "search_feed",
+    "seed_if_empty",
+    "set_source_cursor",
+    "stats",
+    "unalerted_urgent_items",
+    "upsert_items",
+]
 
 DB_PATH = settings.sqlite_db_path
 
@@ -37,6 +57,8 @@ class Storage(Protocol):
     def get_source_cursor(self, source_id: str, db_path: str = DB_PATH) -> str | None: ...
 
     def set_source_cursor(self, source_id: str, cursor: str, db_path: str = DB_PATH) -> None: ...
+
+    def ping(self, db_path: str = DB_PATH) -> bool: ...
 
     def close(self) -> None: ...
 
@@ -85,6 +107,10 @@ def get_source_cursor(source_id: str, db_path: str = DB_PATH) -> str | None:
 
 def set_source_cursor(source_id: str, cursor: str, db_path: str = DB_PATH) -> None:
     return _backend.set_source_cursor(source_id, cursor, db_path)
+
+
+def ping(db_path: str = DB_PATH) -> bool:
+    return _backend.ping(db_path)
 
 
 def close() -> None:

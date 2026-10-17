@@ -28,9 +28,18 @@ data:
   # out-of-band — it is not applied by kustomize). Prepared statements are off
   # by default so the same image works over direct/session/transaction modes;
   # set DB_PREPARE_THRESHOLD=5 only on a direct or session-mode connection.
+  # The API verifies the schema at startup; apply migrations with the
+  # optional migrate-job.yaml before rolling the deployment.
   # DB_POOL_MIN_SIZE: "1"
   # DB_POOL_MAX_SIZE: "4"
+  # DB_POOL_TIMEOUT: "30"
+  # DB_POOL_MAX_IDLE: "600"
+  # DB_POOL_MAX_LIFETIME: "3600"
   # DB_CONNECT_TIMEOUT: "10"
   # DB_APPLICATION_NAME: "security-feed"
+  # DB_STATEMENT_TIMEOUT_MS: "15000"
+  # DB_IDLE_TX_TIMEOUT_MS: "30000"
+  # DB_LOCK_TIMEOUT_MS: "5000"
   # DB_SSLMODE: "require"
+  # DB_SSLROOTCERT: "/etc/ssl/supabase/prod-supabase.cer"
   # DB_PREPARE_THRESHOLD: "5"

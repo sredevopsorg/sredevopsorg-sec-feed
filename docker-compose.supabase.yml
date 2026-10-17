@@ -1,0 +1,41 @@
+# Supabase overlay — run the API against hosted Supabase and skip local Postgres.
+#
+#   1. Put the runtime DML-only DSN and the privileged migration DSN in `.env`
+#      (see .env.example):
+#        DATABASE_URL=postgresql://feed_app.PROJECT-REF:PASSWORD@HOST:5432/postgres
+#        ADMIN_DATABASE_URL=postgresql://postgres.PROJECT-REF:PASSWORD@HOST:5432/postgres
+#        DB_SSLMODE=require
+#   2. docker compose -f docker-compose.yml -f docker-compose.supabase.yml up --build
+#
+# The base file's `postgres`/`postgres-init` services are put behind the
+# `local-db` profile, so they are not started by this overlay. The `migrate`
+# service runs first and applies pending schema migrations as the admin role;
+# the API then starts with the DML-only role.
+services:
+  api:
+    environment:
+      - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL (feed_app DSN) in .env}
+      - DB_SSLMODE=${DB_SSLMODE:-require}
+      - DB_SSLROOTCERT=${DB_SSLROOTCERT:-}
+      # Session-mode pooler: prepared statements are supported. If you switch
+      # to transaction mode (:6543), set DB_PREPARE_THRESHOLD to an empty value.
+      - DB_PREPARE_THRESHOLD=${DB_PREPARE_THRESHOLD:-5}
+      - DB_POOL_MIN_SIZE=${DB_POOL_MIN_SIZE:-1}
+      - DB_POOL_MAX_SIZE=${DB_POOL_MAX_SIZE:-4}
+      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-30}
+      - DB_STATEMENT_TIMEOUT_MS=${DB_STATEMENT_TIMEOUT_MS:-15000}
+      - DB_IDLE_TX_TIMEOUT_MS=${DB_IDLE_TX_TIMEOUT_MS:-30000}
+      - DB_LOCK_TIMEOUT_MS=${DB_LOCK_TIMEOUT_MS:-5000}
+
+  migrate:
+    environment:
+      - ADMIN_DATABASE_URL=${ADMIN_DATABASE_URL:?set ADMIN_DATABASE_URL in .env}
+      - DB_SSLMODE=${DB_SSLMODE:-require}
+      - DB_SSLROOTCERT=${DB_SSLROOTCERT:-}
+
+  # Not used with hosted Supabase. The `local-db` profile keeps them off
+  # unless explicitly requested with `--profile local-db`.
+  postgres:
+    profiles: ["local-db"]
+  postgres-init:
+    profiles: ["local-db"]

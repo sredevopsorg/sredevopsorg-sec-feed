@@ -33,6 +33,9 @@ ENV PATH="/app/.venv/bin:${PATH}"
 
 COPY --from=builder /app/.venv /app/.venv
 COPY app ./app
+# Versioned schema migrations are applied by `python -m app.migrate upgrade`
+# (one-shot compose service / Kubernetes Job), then verified at API startup.
+COPY migrations ./migrations
 
 # Persistent SQLite database location (writable by the app user).
 RUN mkdir -p /app/data \
