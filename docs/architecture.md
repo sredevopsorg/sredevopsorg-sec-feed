@@ -1,7 +1,7 @@
 # Architecture Review — Security Intelligence Live Feed
 
 Status: Implemented + audited (living document)
-Date: 2025-09-05 (audit follow-ups added 2025-09)
+Date: 2025-09-05; updated 2026-10-17 (dependency lock + docs sync)
 
 This document records the original-state analysis, the target architecture, and
 the delivery of the refactor for the `sredevopsorg-sec-feed` repository. It is
@@ -49,6 +49,7 @@ alert pipeline was a single coroutine, `refresh_feed()`, living in a 778-line
 | 10 | Non-UTC offsets broke the SQLite adapter's text ordering of `published`. | ✅ Resolved — `_ensure_aware()` converts aware values to UTC (PR #17). |
 | 11 | Only the fetcher identified itself to upstreams; `ossf` sent a different agent version, and the other modules sent none. | ✅ Resolved — `app/http_client.py` owns the user agent and timeouts; a test forbids other clients (PR #23). |
 | 12 | The frontend image ran root nginx on port 80 while the invariant and docs claimed non-root on 8080; the README described PostgreSQL and PDBs as part of the default Kubernetes deployment. | ✅ Resolved — unprivileged nginx as UID 101 on 8080, and the manifests/docs now separate default from opt-in components (PR #25 and this PR). |
+| 13 | Dependencies were direct-pinned only; no lockfile meant transitive versions floated between Docker and CI builds, and the local vendored tree had already drifted from the pins. | ✅ Resolved — `pyproject.toml` + hash-locked `uv.lock`, frozen Docker/CI installs, lock check and runtime audit (ADR-0006). |
 
 ## 3. Current architecture (implemented, C4 — Container)
 
@@ -81,6 +82,9 @@ Component-level (backend), all implemented:
 - `app/pipeline.py` — the refresh orchestrator with one-way dependencies:
   `fetch → enrich → persist → index → publish → alert` (ADR-0004). `fetcher.py`
   now only fetches and normalizes (`fetch_all()`).
+- `pyproject.toml` + `uv.lock` — the direct dependency declaration and the
+  committed, hash-locked resolved graph. Docker and CI install with
+  `uv sync --frozen` (ADR-0006).
 
 ## 4. Decision log
 
@@ -90,6 +94,8 @@ Component-level (backend), all implemented:
 | [0002](./adr/0002-centralize-configuration.md) | Centralize configuration in a `Settings` object. | Implemented |
 | [0003](./adr/0003-storage-port-and-adapters.md) | Define a single `Storage` port with SQLite + PostgreSQL adapters. | Implemented |
 | [0004](./adr/0004-domain-models-and-refresh-pipeline.md) | Extract a domain `models` module and decompose the refresh pipeline. | Implemented |
+| [0005](./adr/0005-supabase-hosted-postgres.md) | Adopt hosted Supabase Postgres through the session-mode pooler; Phase 1 prerequisites landed, hosted cutover pending. | Partially implemented |
+| [0006](./adr/0006-uv-lock-and-dependency-policy.md) | Use `pyproject.toml` + hash-locked `uv.lock`; frozen installs, lock checks, and runtime audit. | Implemented |
 
 ## 5. Delivery record
 
@@ -138,6 +144,10 @@ one PR per finding, each with its own tests and verification notes:
     non-root on 8080, and Compose/Kubernetes follow (#25).
 18. **`docs/sync-readme-agents-architecture`** — README, AGENTS.md and this
     document resynced with the code (this PR).
+19. **`chore/dependency-lock-uv`** — migrated Python dependencies to
+    `pyproject.toml` + `uv.lock`, moved Docker/CI to frozen installs, added a
+    runtime audit, refreshed image pins, and corrected the ZDI/`zeroday` and
+    Supabase documentation drift.
 
 ## 6. Remaining follow-ups (deferred, not blocking)
 
@@ -149,3 +159,5 @@ one PR per finding, each with its own tests and verification notes:
   ever grows beyond a single process (observation #5).
 - Add a linter/formatter (e.g. ruff) to CI; the repository still documents
   "none configured", so style is enforced by review only.
+- Complete the hosted Supabase cutover, versioned migrations, and backup plan
+  (ADR-0005 / `docs/supabase-migration-plan.md`).

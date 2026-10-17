@@ -59,7 +59,7 @@ spec:
           # Digest-pinned for reproducibility. To move to a newer release,
           # resolve the digest of the tag you want and replace the sha256:
           #   docker buildx imagetools inspect ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
-          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:api@sha256:11017f19064a35e235b72bd9c49b5a41a22e9a7292d68c3583f649a5ae5f4a03
+          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:api@sha256:7b3848cb812df0d55b9161d83caabe3775a545244acecf9fb205790360bd2169
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

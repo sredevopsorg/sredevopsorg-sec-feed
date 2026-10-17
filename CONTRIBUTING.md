@@ -1,152 +1,149 @@
-<!-- omit in toc -->
-# Contributing to ghost-on-kubernetes
+# Contributing to the Security Intelligence Live Feed
 
-First off, thanks for taking the time to contribute! ❤️
+Thanks for taking the time to contribute. This repository is a FastAPI-backed
+security feed for Linux, cloud, and Kubernetes content, with a dependency-free
+static frontend.
 
-All types of contributions are encouraged and valued. See the [Table of Contents](#table-of-contents) for different ways to help and details about how this project handles them. Please make sure to read the relevant section before making your contribution. It will make it a lot easier for us maintainers and smooth out the experience for all involved. The community looks forward to your contributions. 🎉
+## Table of contents
 
-> And if you like the project, but just don't have time
-> - Star the project
-> - Tweet about it
-> - Refer this project in your project's readme
-> - Mention the project at local meetups and tell your friends/colleagues
+- [I have a question](#i-have-a-question)
+- [Reporting bugs](#reporting-bugs)
+- [Suggesting enhancements](#suggesting-enhancements)
+- [Development setup](#development-setup)
+- [Dependencies](#dependencies)
+- [Tests](#tests)
+- [Pull requests](#pull-requests)
+- [Code style](#code-style)
+- [Security](#security)
+- [License](#license)
 
-<!-- omit in toc -->
-## Table of Contents
+## I have a question
 
-- [I Have a Question](#i-have-a-question)
-- [I Want To Contribute](#i-want-to-contribute)
-- [Reporting Bugs](#reporting-bugs)
-- [Suggesting Enhancements](#suggesting-enhancements)
-<!-- - [Your First Code Contribution](#your-first-code-contribution) -->
-<!-- - [Improving The Documentation](#improving-the-documentation) -->
-<!-- - [Styleguides](#styleguides) -->
-<!-- - [Commit Messages](#commit-messages) -->
-- [Join The Project Team](#join-the-project-team)
+Read [README.md](README.md), [docs/architecture.md](docs/architecture.md), and
+the [ADRs](docs/adr/) first. If the answer is not there, search the
+[issue tracker](https://github.com/sredevopsorg/sredevopsorg-sec-feed/issues)
+and open a new issue with as much context as possible.
 
+## Reporting bugs
 
+Before filing:
 
-## I Have a Question
+- Reproduce against the latest `main`.
+- Check whether the problem is a configuration issue (see `.env.example`,
+  `README.md`, and the environment-variable tables).
+- Search existing issues.
 
-> If you want to ask a question, we assume that you have read the available [Documentation](https://github.com/sredevopsorg/ghost-on-kubernetes/tree/main/docs).
+Include the OS, container runtime, Python/uv version, the exact command you
+ran, the expected and actual behavior, and relevant logs. Do **not** report
+security vulnerabilities in public issues; see [Security](#security).
 
-Before you ask a question, it is best to search for existing [Issues](https://github.com/sredevopsorg/ghost-on-kubernetes/issues) that might help you. In case you have found a suitable issue and still need clarification, you can write your question in this issue. It is also advisable to search the internet for answers first.
+## Suggesting enhancements
 
-If you then still feel the need to ask a question and need clarification, we recommend the following:
+Open an issue describing the current behavior, the proposed change, and why it
+is useful for this project. Keep the scope focused; discuss large changes in an
+issue before opening a pull request.
 
-- Open an [Issue](https://github.com/sredevopsorg/ghost-on-kubernetes/issues/new).
-- Provide as much context as you can about what you're running into.
-- Provide project and platform versions (nodejs, npm, etc), depending on what seems relevant.
+## Development setup
 
-We will then take care of the issue as soon as possible.
+Container-first development is the default:
 
-<!--
-You might want to create a separate issue tag for questions and include it in this description. People should then tag their issues accordingly.
+```bash
+cp .env.example .env   # then set POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+docker compose up --build
+```
 
-Depending on how large the project is, you may want to outsource the questioning, e.g. to Stack Overflow or Gitter. You may add additional contact and information possibilities:
-- IRC
-- Slack
-- Gitter
-- Stack Overflow tag
-- Blog
-- FAQ
-- Roadmap
-- E-Mail List
-- Forum
--->
+- UI: <http://localhost:8080>
+- API: <http://localhost:8000> (also reachable at `/api` through the UI origin)
 
-## I Want To Contribute
+For host development, install [uv](https://docs.astral.sh/uv/) 0.13.1 or newer
+and Python 3.13:
 
-> ### Legal Notice <!-- omit in toc -->
-> When contributing to this project, you must agree that you have authored 100% of the content, that you have the necessary rights to the content and that the content you contribute may be provided under the project licence.
+```bash
+uv sync --frozen
+uv run --frozen uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-### Reporting Bugs
+The frontend is plain HTML/CSS/JS in `frontend/`; serve it with any static file
+server and point `window.__API_BASE_URL__` at the API. Do not add npm,
+bundlers, or CDN scripts.
 
-<!-- omit in toc -->
-#### Before Submitting a Bug Report
+## Dependencies
 
-A good bug report shouldn't leave others needing to chase you up for more information. Therefore, we ask you to investigate carefully, collect information and describe the issue in detail in your report. Please complete the following steps in advance to help us fix any potential bug as fast as possible.
+Direct dependencies are declared in `pyproject.toml`. The full resolved and
+hash-pinned graph is committed in `uv.lock`; `requirements*.txt` files are no
+longer used.
 
-- Make sure that you are using the latest version.
-- Determine if your bug is really a bug and not an error on your side e.g. using incompatible environment components/versions (Make sure that you have read the [documentation](https://github.com/sredevopsorg/ghost-on-kubernetes/tree/main/docs). If you are looking for support, you might want to check [this section](#i-have-a-question)).
-- To see if other users have experienced (and potentially already solved) the same issue you are having, check if there is not already a bug report existing for your bug or error in the [bug tracker](https://github.com/sredevopsorg/ghost-on-kubernetes/issues?q=label%3Abug).
-- Also make sure to search the internet (including Stack Overflow) to see if users outside of the GitHub community have discussed the issue.
-- Collect information about the bug:
-- Stack trace (Traceback)
-- OS, Platform and Version (Windows, Linux, macOS, x86, ARM)
-- Version of the interpreter, compiler, SDK, runtime environment, package manager, depending on what seems relevant.
-- Possibly your input and the output
-- Can you reliably reproduce the issue? And can you also reproduce it with older versions?
+To update dependencies:
 
-<!-- omit in toc -->
-#### How Do I Submit a Good Bug Report?
+1. Edit the relevant pin in `pyproject.toml`.
+2. Run `uv lock` (or `uv lock --upgrade` to refresh transitives).
+3. Run `uv lock --check`, `uv sync --frozen`, and the test suite.
+4. Run the runtime audit (CI does this in the `audit` job):
 
-> You must never report security related issues, vulnerabilities or bugs including sensitive information to the issue tracker, or elsewhere in public. Instead sensitive bugs must be sent by email to .
-<!-- You may add a PGP key to allow the messages to be sent encrypted as well. -->
+   ```bash
+   uv sync --frozen --no-dev
+   uvx --from pip-audit==2.10.1 pip-audit \
+     --path .venv/lib/python3.13/site-packages --strict
+   uv sync --frozen
+   ```
 
-We use GitHub issues to track bugs and errors. If you run into an issue with the project:
+5. Commit `pyproject.toml` and `uv.lock` together.
 
-- Open an [Issue](https://github.com/sredevopsorg/ghost-on-kubernetes/issues/new). (Since we can't be sure at this point whether it is a bug or not, we ask you not to talk about a bug yet and not to label the issue.)
-- Explain the behavior you would expect and the actual behavior.
-- Please provide as much context as possible and describe the *reproduction steps* that someone else can follow to recreate the issue on their own. This usually includes your code. For good bug reports you should isolate the problem and create a reduced test case.
-- Provide the information you collected in the previous section.
+Never hand-edit `uv.lock`, and do not install packages ad hoc into the project
+environment. Renovate raises dependency and image-digest updates; lock-file
+maintenance refreshes transitives.
 
-Once it's filed:
+## Tests
 
-- The project team will label the issue accordingly.
-- A team member will try to reproduce the issue with your provided steps. If there are no reproduction steps or no obvious way to reproduce the issue, the team will ask you for those steps and mark the issue as `needs-repro`. Bugs with the `needs-repro` tag will not be addressed until they are reproduced.
-- If the team is able to reproduce the issue, it will be marked `needs-fix`, as well as possibly other tags (such as `critical`), and the issue will be left to be [implemented by someone](#your-first-code-contribution).
+```bash
+uv sync --frozen
+uv run --frozen pytest -q
+```
 
-<!-- You might want to create an issue template for bugs and errors that can be used as a guide and that defines the structure of the information to be included. If you do so, reference it here in the description. -->
+The Postgres adapter tests skip unless `TEST_DATABASE_URL` is set. CI provides
+a disposable PostgreSQL 16 service; locally you can run one with Docker:
 
+```bash
+docker run --rm -d --name sec-feed-test-pg \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feed_test \
+  -p 5433:5432 postgres:16-alpine
+TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5433/feed_test \
+  uv run --frozen pytest -q
+```
 
-### Suggesting Enhancements
+Frontend edits should pass `node --check frontend/app.js`.
 
-This section guides you through submitting an enhancement suggestion for ghost-on-kubernetes, **including completely new features and minor improvements to existing functionality**. Following these guidelines will help maintainers and the community to understand your suggestion and find related suggestions.
+## Pull requests
 
-<!-- omit in toc -->
-#### Before Submitting an Enhancement
+- Target `main`. CI runs on pull requests and pushes to `main`; both must be
+  green.
+- A stacked PR (base = another feature branch) must be retargeted to `main` as
+  soon as its base merges.
+- Keep changes focused, update tests and docs with behavior changes, and
+  describe how you verified the change.
+- Update the README sources/API/schema tables and AGENTS.md when behavior,
+  ports, invariants, or the feed-item contract change.
 
-- Make sure that you are using the latest version.
-- Read the [documentation](https://github.com/sredevopsorg/ghost-on-kubernetes/tree/main/docs) carefully and find out if the functionality is already covered, maybe by an individual configuration.
-- Perform a [search](https://github.com/sredevopsorg/ghost-on-kubernetes/issues) to see if the enhancement has already been suggested. If it has, add a comment to the existing issue instead of opening a new one.
-- Find out whether your idea fits with the scope and aims of the project. It's up to you to make a strong case to convince the project's developers of the merits of this feature. Keep in mind that we want features that will be useful to the majority of our users and not just a small subset. If you're just targeting a minority of users, consider writing an add-on/plugin library.
+## Code style
 
-<!-- omit in toc -->
-#### How Do I Submit a Good Enhancement Suggestion?
+There is no linter or formatter configured. Keep Python PEP 8-ish and
+readable; use type hints and `from __future__ import annotations` where the
+surrounding module does. Keep SQL parameterized and search wildcards escaped.
+Prefer the existing module boundaries and the `Storage` port over new
+abstractions.
 
-Enhancement suggestions are tracked as [GitHub issues](https://github.com/sredevopsorg/ghost-on-kubernetes/issues).
+## Security
 
-- Use a **clear and descriptive title** for the issue to identify the suggestion.
-- Provide a **step-by-step description of the suggested enhancement** in as many details as possible.
-- **Describe the current behavior** and **explain which behavior you expected to see instead** and why. At this point you can also tell which alternatives do not work for you.
-- **Explain why this enhancement would be useful** to most ghost-on-kubernetes users. You may also want to point out the other projects that solved it better and which could serve as inspiration.
+Report vulnerabilities privately to **devsecops@sredevops.org** as described in
+[SECURITY.md](SECURITY.md). Never open a public issue with exploit details or
+credentials.
 
-<!-- You might want to create an issue template for enhancement suggestions that can be used as a guide and that defines the structure of the information to be included. If you do so, reference it here in the description. -->
+## License
 
-<!-- TODO
-### Your First Code Contribution
-include Setup of env, IDE and typical getting started instructions?
+By contributing, you agree that your contribution is licensed under the
+project's MIT license (see [LICENSE](LICENSE)).
 
--->
-
-<!-- TODO
-### Improving The Documentation
-Updating, improving and correcting the documentation
--->
-
-<!-- TODO
-## Styleguides
-### Commit Messages
-
--->
-
-## Join The Project Team
-
-Just open an Issue or write us to 📫 info@sredevops.org
-
-<!-- TODO -->
-
-<!-- omit in toc -->
 ## Attribution
-This guide is based on the **contributing-gen**. [Make your own](https://github.com/bttger/contributing-gen)!
+
+This guide is based on **contributing-gen**.
+[Make your own](https://github.com/bttger/contributing-gen)!

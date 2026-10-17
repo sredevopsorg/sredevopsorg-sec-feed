@@ -1,21 +1,21 @@
 # ADR-0005: Move the PostgreSQL backend to hosted Supabase
 
-- Status: **Proposed** (not implemented)
-- Date: 2026-09-16
+- Status: **Partially implemented** (Phase 1 prerequisites landed; hosted cutover pending)
+- Date: 2026-09-16 (implementation update 2026-10-17)
 - Relates to: ADR-0003 (storage port and adapters)
 
 ## Context
 
 The project ships PostgreSQL as its primary store and SQLite as the local,
 zero-setup fallback (ADR-0003). The Postgres adapter
-(`app/postgres_store.py`, 328 lines) is selected when `DATABASE_URL` is set and
-uses `psycopg` 3.3.5. In practice:
+(`app/postgres_store.py`) is selected when `DATABASE_URL` is set and uses
+`psycopg` 3.3.6. At the time of the analysis:
 
 - The Compose `postgres` service has **no backup story**: losing
   `./mount/postgres-data` loses the archive.
 - The Kubernetes default does not even run Postgres — `deploy/k8s/postgres.yaml`
   is commented out of `kustomization.yaml` and `DATABASE_URL` is commented out
-  of `deploy/k8s/secret.yaml`, so the shipped default is SQLite on a PVC.
+  of `deploy/k8s/secret.example.yaml`, so the shipped default is SQLite on a PVC.
 - The adapter opens **a new connection per operation** (11 call sites of
   `_connect()`), and `_live_count()` adds a second round trip to every read.
   `stats()` issues 7 queries including a full `SELECT tags` scan aggregated in
@@ -27,6 +27,15 @@ uses `psycopg` 3.3.5. In practice:
   recorded anywhere in `docs/architecture.md` — it was found during the analysis
   for this decision, and it is a gap by omission rather than a documented
   trade-off.
+
+> **Implementation update (2026-10-17).** Phase 1 has landed: the adapter uses
+> a lazy `psycopg_pool.ConnectionPool`, `_live_count()` is folded into a single
+> `_HIDE_SAMPLE` predicate, `stats()` is one SQL statement, `init_db` executes
+> single statements, and `tests/test_postgres_store.py` runs against a real
+> Postgres in CI. The connection-per-operation and 7-query bullets above are
+> retained as the pre-Phase-1 rationale. The hosted Supabase cutover, versioned
+> migrations, least-privilege role, backups, and cross-replica refresh lock
+> remain pending.
 
 The full analysis and evidence are in
 [`docs/supabase-migration-plan.md`](../supabase-migration-plan.md).
