@@ -3,7 +3,7 @@ name = "sredevopsorg-sec-feed"
 version = "0.2.0rc1"
 description = "Security intelligence feed for Linux, cloud, and Kubernetes"
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.15,<3.16"
 dependencies = [
   "fastapi==0.143.3",
   "uvicorn==0.54.0",
