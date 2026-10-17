@@ -148,6 +148,10 @@ one PR per finding, each with its own tests and verification notes:
     `pyproject.toml` + `uv.lock`, moved Docker/CI to frozen installs, added a
     runtime audit, refreshed image pins, and corrected the ZDI/`zeroday` and
     Supabase documentation drift.
+20. **`feat/new-sources`** — added the Kubernetes official CVE feed, GCP
+    security bulletins, Amazon Linux 2023 advisories, a CISA KEV source and
+    curated GHSA sources; replaced the filtered Kubernetes Blog feed and moved
+    NVD queries to bounded publication windows.
 
 ## 6. Remaining follow-ups (deferred, not blocking)
 

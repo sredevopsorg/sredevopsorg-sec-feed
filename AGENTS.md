@@ -59,7 +59,7 @@ app/main.py        FastAPI API routes and app startup (pure JSON API)
 app/sources.py     Source definitions (add new feeds here)
 app/fetcher.py     Fetching + normalization of upstream sources
 app/pipeline.py    Refresh orchestration: fetch → enrich → persist → index → publish → alert
-app/enrich.py      CISA KEV + FIRST EPSS enrichment (best-effort)
+app/enrich.py      CISA KEV + FIRST EPSS enrichment, plus the KEV source (best-effort)
 app/osv.py         OSV.dev enrichment (affected/fixed/severity, best-effort)
 app/search.py      Search backend (OpenSearch if configured, SQL fallback)
 app/ossf.py         OpenSSF Malicious Packages source (GitHub API + cursor)
@@ -117,7 +117,9 @@ uv.lock                      Committed, hash-locked dependency graph
 1. Add a `Source` entry to `app/sources.py`.
 2. If it is RSS/Atom, no new fetcher code is needed. If it is a new API shape,
    add a `_fetch_<kind>` function in `app/fetcher.py` and a branch in
-   `_fetch_source()`.
+   `_fetch_source()`. Current kinds: `rss`, `nvd`, `redhat-api`, `ghsa`,
+   `kev`, `ossf-malicious`. Each GHSA entry costs one GitHub API request per
+   refresh, so keep that curated list short.
 3. Add relevance filtering if the feed is broader than Linux/cloud/Kubernetes
    (see `_is_relevant()`).
 4. Add a unit test for the normalization/filtering logic with fixture data.
@@ -180,7 +182,7 @@ Every item must be normalized to the `FeedItem` dataclass in
 - `title`, `summary`, `url`, `source`, `source_url`
 - `published` — timezone-aware UTC datetime or `None`
 - `tags` — core set `linux`, `cloud`, `kubernetes`, `cve`, `exploit`,
-  `patch`, `threat`; KEV enrichment adds `kev`; the OpenSSF source adds
+  `patch`, `threat`; KEV enrichment and the KEV source add `kev`; the OpenSSF source adds
   `malware`, `supply-chain`, `malicious-packages` and the lowercased ecosystem
   (`go`, `npm`, …); the ZDI sources add `zeroday`
 - `cves` — list of uppercase CVE IDs, e.g. `["CVE-2024-21626"]`
@@ -221,8 +223,14 @@ emits `is_sample`.
   the store *and* in the OpenSearch index (invariant 14).
 - **HTML summaries** must be stripped/truncated with `_strip_html()` and
   `_truncate()` before rendering.
-- **NVD keyword queries** return oldest-first. Use the `totalResults` +
-  `startIndex` approach already implemented in `_fetch_nvd()`.
+- **NVD keyword queries** return oldest-first. `_fetch_nvd()` queries a
+  bounded `pubStartDate` window and sorts client-side; one page covers the
+  window, and only an overflow falls back to the last page. Keep that shape
+  instead of re-introducing a full-history `totalResults` probe.
+- **KEV items can duplicate another source.** The KEV source hashes the NVD
+  detail URL, so one CVE can appear both as a KEV item and as an NVD/GHSA item
+  under different ids. That near-duplicate is expected; do not "fix" it by
+  dropping the KEV item, which is the only one guaranteed to be urgent.
 - **CISA feed noise.** CISA publishes ICS/OT advisories too; keep the
   topic filter in `_is_relevant()` when touching that source.
 - **Lockfiles are generated.** Never hand-edit `uv.lock`; edit

@@ -7,10 +7,14 @@ keeps working even when these services are unreachable.
 from __future__ import annotations
 
 import logging
+import re
 import time
+from datetime import datetime, timedelta, timezone
 
 from . import http_client
-from .fetcher import FeedItem
+from .config import settings
+from .fetcher import FeedItem, _hash_item, _infer_tags, _strip_html, _truncate
+from .sources import Source
 
 logger = logging.getLogger(__name__)
 
@@ -88,4 +92,83 @@ async def enrich_items(items: list[FeedItem]) -> list[FeedItem]:
                 item.urgent = True
         if item.epss_score is not None and item.epss_score >= 0.5 and item.severity in ("critical", "high"):
             item.urgent = True
+    return items
+
+
+# ---------------------------------------------------------------------------
+# KEV source: recently added known-exploited entries
+# ---------------------------------------------------------------------------
+
+_NVD_DETAIL_URL = "https://nvd.nist.gov/vuln/detail/{cve_id}"
+_NVD_LINK_RE = re.compile(r"https://nvd\.nist\.gov/vuln/detail/(CVE-\d{4}-\d{4,7})", re.IGNORECASE)
+
+
+def _kev_reference(entry: dict) -> str:
+    """Return the NVD detail URL for a KEV entry.
+
+    KEV notes usually embed an NVD link; fall back to the canonical detail
+    page so every item has a stable, actionable URL.
+    """
+    match = _NVD_LINK_RE.search(str(entry.get("notes") or ""))
+    if match:
+        return _NVD_DETAIL_URL.format(cve_id=match.group(1).upper())
+    return _NVD_DETAIL_URL.format(cve_id=(entry.get("cveID") or "").upper())
+
+
+def _kev_added_at(entry: dict) -> datetime | None:
+    """Parse the catalog's `dateAdded` (YYYY-MM-DD) as a UTC datetime."""
+    raw = str(entry.get("dateAdded") or "").strip()
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+async def fetch_recent_kev(source: Source) -> list[FeedItem]:
+    """Publish KEV entries added to CISA's catalog recently as feed items.
+
+    Enrichment only flags CVEs that another source already published; this
+    source closes the gap for exploited CVEs no keyword feed mentions. Every
+    item is `urgent` and carries the `kev` tag because CISA has confirmed
+    exploitation in the wild.
+    """
+    catalog = await _fetch_kev()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, settings.kev_source_days))
+    recent: list[tuple[datetime, dict]] = []
+    for entry in catalog.values():
+        added = _kev_added_at(entry)
+        if added is not None and added >= cutoff:
+            recent.append((added, entry))
+    recent.sort(key=lambda pair: pair[0], reverse=True)
+
+    items: list[FeedItem] = []
+    for added, entry in recent[: source.max_items]:
+        cve_id = (entry.get("cveID") or "").upper()
+        if not cve_id:
+            continue
+        name = (entry.get("vulnerabilityName") or "").strip()
+        title = f"{cve_id}: {name}" if name else cve_id
+        parts = [entry.get("shortDescription") or ""]
+        if entry.get("requiredAction"):
+            parts.append(f"Required action: {entry['requiredAction']}")
+        summary = _truncate(_strip_html(" ".join(p for p in parts if p)))
+        url = _kev_reference(entry)
+        cves = [cve_id]
+        tags = _infer_tags(f"{title} {summary}", source.tags | {"kev"}, cves)
+        items.append(
+            FeedItem(
+                id=_hash_item(url, title),
+                title=title,
+                summary=summary,
+                url=url,
+                source=source.name,
+                source_url=source.url,
+                published=added,
+                tags=tags,
+                cves=cves,
+                severity="unknown",
+                urgent=True,
+                kev=True,
+            )
+        )
     return items

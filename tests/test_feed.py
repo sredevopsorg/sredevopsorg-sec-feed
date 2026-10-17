@@ -29,6 +29,11 @@ def test_infer_severity():
     assert _infer_severity("medium severity issue") == "medium"
     assert _infer_severity("something") == "unknown"
     assert _infer_severity("some text", cvss_score=9.8) == "critical"
+    # Red Hat / Amazon Linux rating words appear in serialized advisory titles.
+    assert _infer_severity("ALAS2023-2026-3234 (important): mariadb1011") == "high"
+    assert _infer_severity("ALAS2023-2026-9999 (critical): kernel") == "critical"
+    assert _infer_severity("ALAS2023-2026-0001 (moderate): openssl") == "medium"
+    assert _infer_severity("ALAS2023-2026-0002 (low): vim") == "low"
 
 
 def test_infer_tags():
@@ -111,6 +116,8 @@ def test_patch_status_from_text():
     # Distro notices default to "fixed" (advisory = released fixes).
     assert _patch_status_from_text(ubuntu, "USN-7234-1: Linux kernel vulnerabilities") == "fixed"
     assert _patch_status_from_text(debian, "DSA-5812-1 openssl security update") == "fixed"
+    alas = Source(id="alas", name="ALAS", kind="rss", url="u", tags=frozenset())
+    assert _patch_status_from_text(alas, "ALAS2023-2026-3234 (important): mariadb1011") == "fixed"
     # Explicit "not affected" downgrades.
     assert _patch_status_from_text(ubuntu, "CVE-2024-0001 ... Ubuntu is not affected") == "not-affected"
     # Non-distro sources stay unknown.
@@ -243,15 +250,150 @@ def test_epss_request_is_capped_not_chunked(monkeypatch):
 def test_is_relevant_filters_only_the_broad_sources():
     from app.sources import Source
 
-    k8s = Source(id="k8s", name="K8s", kind="rss", url="u")
     cisa = Source(id="cisa", name="CISA", kind="rss", url="u")
     ubuntu = Source(id="ubuntu", name="Ubuntu", kind="rss", url="u")
+    gcp = Source(id="gcp", name="GCP", kind="rss", url="u")
 
-    # The Kubernetes blog also carries release notes and tutorials.
-    assert _is_relevant(k8s, "Kubernetes v1.32 release notes") is False
-    assert _is_relevant(k8s, "CVE-2025-0001: kubelet vulnerability fixed") is True
     # CISA carries ICS/OT advisories that are off-topic for this feed.
     assert _is_relevant(cisa, "Siemens SIMATIC ICS advisory") is False
     assert _is_relevant(cisa, "Advisory: Kubernetes cluster takeover") is True
-    # Topic-scoped sources are never filtered here.
+    # Topic-scoped sources, including the official Kubernetes CVE feed, are
+    # never filtered here.
     assert _is_relevant(ubuntu, "USN-7234-1: Linux kernel vulnerabilities") is True
+    assert _is_relevant(gcp, "GCP-2026-068 Cloud VPN vulnerability") is True
+
+# ---------------------------------------------------------------------------
+# Source definitions and newer source kinds (NVD window, KEV, GHSA)
+# ---------------------------------------------------------------------------
+
+def test_sources_are_well_formed():
+    from app.sources import SOURCES
+
+    ids = [source.id for source in SOURCES]
+    assert len(ids) == len(set(ids))
+    assert {"k8s-cve", "gcp", "alas", "kev", "ghsa-containerd"} <= set(ids)
+    assert all(source.url.startswith("https://") for source in SOURCES)
+    assert all(source.max_items > 0 for source in SOURCES)
+    kinds = {"rss", "nvd", "redhat-api", "ghsa", "kev", "ossf-malicious"}
+    assert {source.kind for source in SOURCES} <= kinds
+
+
+def test_nvd_window_url_uses_a_bounded_date_window():
+    from app.fetcher import _nvd_window_url
+
+    url = _nvd_window_url(
+        "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=kubernetes&resultsPerPage=10",
+        100,
+        7,
+    )
+    assert "keywordSearch=kubernetes" in url
+    assert "pubStartDate=" in url
+    assert "pubEndDate=" in url
+    assert "resultsPerPage=100" in url
+    # The window query replaces the totalResults probe, so there is no page
+    # jump unless the window overflows a single page.
+    assert "startIndex" not in url
+    overflow = _nvd_window_url("https://example.test/cves?keywordSearch=a", 10, 7, start_index=5)
+    assert "startIndex=5" in overflow
+
+
+def test_fetch_recent_kev_filters_window_and_flags_urgent(monkeypatch):
+    from types import SimpleNamespace
+
+    from app import enrich as enrich_module
+    from app.sources import Source
+
+    now = datetime.now(timezone.utc)
+    catalog = {
+        "CVE-2026-0001": {
+            "cveID": "CVE-2026-0001",
+            "dateAdded": now.strftime("%Y-%m-%d"),
+            "vendorProject": "Acme",
+            "product": "kubelet",
+            "vulnerabilityName": "Acme kubelet remote code execution",
+            "shortDescription": "RCE in kubelet.",
+            "requiredAction": "Apply updates.",
+            "notes": "https://nvd.nist.gov/vuln/detail/CVE-2026-0001",
+        },
+        "CVE-2026-0002": {
+            "cveID": "CVE-2026-0002",
+            "dateAdded": (now - timedelta(days=90)).strftime("%Y-%m-%d"),
+            "vulnerabilityName": "Old bug",
+        },
+        "CVE-2026-0003": {  # malformed dates are skipped, never crash a refresh
+            "cveID": "CVE-2026-0003",
+            "dateAdded": "not-a-date",
+        },
+    }
+
+    async def fake_kev():
+        return catalog
+
+    monkeypatch.setattr(enrich_module, "_fetch_kev", fake_kev)
+    monkeypatch.setattr(enrich_module, "settings", SimpleNamespace(kev_source_days=7))
+    source = Source(
+        id="kev",
+        name="KEV",
+        kind="kev",
+        url="https://example.test/kev",
+        tags=frozenset({"exploit", "kev"}),
+        max_items=10,
+    )
+    items = asyncio.run(enrich_module.fetch_recent_kev(source))
+
+    assert [item.cves for item in items] == [["CVE-2026-0001"]]
+    item = items[0]
+    assert item.urgent is True and item.kev is True
+    assert {"kev", "cve"} <= item.tags
+    assert item.url == "https://nvd.nist.gov/vuln/detail/CVE-2026-0001"
+    assert item.published == datetime.strptime(now.strftime("%Y-%m-%d"), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    assert "Required action:" in item.summary
+
+
+def test_ghsa_uses_linked_cve_severity_and_html_url():
+    from app.fetcher import GHSA_SEVERITY, _fetch_ghsa
+    from app.sources import Source
+
+    # Current advisories use MEDIUM; older entries use MODERATE.
+    assert GHSA_SEVERITY["MEDIUM"] == "medium"
+    assert GHSA_SEVERITY["MODERATE"] == "medium"
+
+    row = {
+        "ghsa_id": "GHSA-xxxx-xxxx-xxxx",
+        "cve_id": "CVE-2026-12345",
+        "summary": "runc: container escape via /proc",
+        "description": "<p>Container escape in runc.</p>",
+        "severity": "HIGH",
+        "published_at": "2026-10-01T10:00:00Z",
+        "html_url": "https://github.com/advisories/GHSA-xxxx-xxxx-xxxx",
+    }
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return [row]
+
+    class FakeClient:
+        async def get(self, url, headers=None):
+            return FakeResponse()
+
+    source = Source(
+        id="ghsa-runc",
+        name="GHSA — runc",
+        kind="ghsa",
+        url="https://api.github.com/advisories?affects=github.com/opencontainers/runc",
+        tags=frozenset({"kubernetes", "cve"}),
+        max_items=5,
+    )
+    items = asyncio.run(_fetch_ghsa(source, FakeClient()))
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.title.startswith("CVE-2026-12345:")
+    assert item.severity == "high"
+    assert item.cves == ["CVE-2026-12345"]
+    assert item.url == "https://github.com/advisories/GHSA-xxxx-xxxx-xxxx"
+    assert {"kubernetes", "cve"} <= item.tags
+    assert item.published == datetime(2026, 10, 1, 10, 0, tzinfo=timezone.utc)
