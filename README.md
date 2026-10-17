@@ -53,7 +53,7 @@ Dependencies are declared in `pyproject.toml` and hash-locked in the committed
 | Alerting | Discord webhook (primary) / Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
-All roadmap items are complete for this release candidate (0.2.0-rc.1).
+All roadmap items are complete for v1.1.1.
 
 The frontend and backend are separate deployables: the backend is a pure JSON
 API (`/api/*`, `/health`) and the frontend is a static app served by nginx that
