@@ -12,7 +12,7 @@ import asyncio
 import logging
 import re
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -20,6 +20,7 @@ import feedparser
 import httpx
 
 from . import http_client
+from .config import settings
 from .models import (
     FeedItem,
     _ensure_aware,
@@ -43,10 +44,6 @@ TARGET_KEYWORDS = (
     "kubernetes", "k8s", "kube", "helm", "istio", "envoy", "cri-o",
     "cloud", "aws", "amazon", "azure", "gcp", "google cloud", "gke",
     "docker", "container", "virtual machine", "server",
-)
-SECURITY_KEYWORDS = (
-    "security", "cve", "vulnerability", "vulnerabilities", "advisory",
-    "exploit", "patch", "backport", "fixed", "update", "bulletin", "flaw",
 )
 
 
@@ -85,12 +82,10 @@ def _is_relevant(source: Source, text: str) -> bool:
     """Return True when an item is on-topic for this feed.
 
     Most sources are already topic-scoped (distro trackers, cloud bulletins,
-    keyword-scoped NVD queries), so only the two broad feeds are filtered.
+    official CVE feeds, keyword-scoped NVD queries), so only the broad CISA
+    feed needs filtering.
     """
     t = text.lower()
-    if source.id == "k8s":
-        # The Kubernetes blog also publishes release notes and tutorials.
-        return any(w in t for w in SECURITY_KEYWORDS)
     if source.id == "cisa":
         # CISA publishes both ICS/OT and enterprise advisories. Keep only the
         # ones that touch our target ecosystem.
@@ -161,13 +156,15 @@ def _infer_severity(text: str, cvss_score: float | None = None) -> str:
             return "low"
         return "unknown"
     t = text.lower()
-    if any(w in t for w in ("critical severity", "critical vulnerability", "critical security", "critical flaw", "critical remote", "rated critical", "cvss 9.", "cvss:4.0/av:n/ac:l")):
+    if any(w in t for w in ("critical severity", "critical vulnerability", "critical security", "critical flaw", "critical remote", "rated critical", "(critical)", "cvss 9.", "cvss:4.0/av:n/ac:l")):
         return "critical"
-    if any(w in t for w in ("high severity", "high-severity", "important severity", "privilege escalation", "remote code execution", "rce")):
+    # "important" is the Red Hat / Amazon Linux rating between critical and
+    # moderate, so it maps to high.
+    if any(w in t for w in ("high severity", "high-severity", "important severity", "(important)", "privilege escalation", "remote code execution", "rce")):
         return "high"
-    if "medium severity" in t or "medium-severity" in t:
+    if any(w in t for w in ("medium severity", "medium-severity", "(moderate)")):
         return "medium"
-    if "low severity" in t or "low-severity" in t:
+    if any(w in t for w in ("low severity", "low-severity", "(low)")):
         return "low"
     return "unknown"
 
@@ -222,12 +219,14 @@ def normalize_patch_status(raw: str | None) -> str:
 def _patch_status_from_text(source: Source, text: str) -> str:
     """Best-effort patch status derived from advisory text.
 
-    Ubuntu/Debian security notices (USN/DSA) announce released fixes by
-    default, so they start at ``fixed`` and are only downgraded when the text
-    explicitly says otherwise. Other sources stay ``unknown``.
+    Ubuntu/Debian security notices (USN/DSA) and Amazon Linux errata (ALAS)
+    announce released fixes by default, so they start at ``fixed`` and are
+    only downgraded when the text explicitly says otherwise. Other sources
+    stay ``unknown``.
     """
     t = text.lower()
-    status = PATCH_STATUS_FIXED if source.id in ("ubuntu", "debian") else PATCH_STATUS_UNKNOWN
+    released_fix_sources = ("ubuntu", "debian", "alas")
+    status = PATCH_STATUS_FIXED if source.id in released_fix_sources else PATCH_STATUS_UNKNOWN
     if any(w in t for w in ("not affected", "not vulnerable", "unaffected", "not-affected")):
         return PATCH_STATUS_NOT_AFFECTED
     if any(w in t for w in ("will not fix", "won't fix", "no fix", "fix deferred", "deferred")):
@@ -326,38 +325,36 @@ def _nvd_reference_url(cve: dict[str, Any]) -> str:
     return f"https://nvd.nist.gov/vuln/detail/{cve.get('id')}"
 
 
-def _nvd_latest_url(source_url: str, max_items: int) -> str:
-    """Return the NVD query URL that fetches the *latest* matching CVEs.
+def _nvd_window_url(
+    source_url: str,
+    results_per_page: int,
+    days: int,
+    start_index: int | None = None,
+) -> str:
+    """Return an NVD query URL limited to CVEs published in the last `days` days.
 
-    NVD keyword queries return the oldest matches first, so we use the total
-    result count to skip straight to the last page (the newest items).
+    NVD API 2.0 requires both `pubStartDate` and `pubEndDate` (at most 120
+    days apart) in ISO-8601 UTC. A bounded window lets one page cover every
+    recent match for our keywords (measured: 50 "linux kernel", 13
+    "kubernetes", 89 "cloud" in seven days), so a refresh needs a single
+    request per NVD source instead of a totalResults probe plus a jump to the
+    last page over the whole corpus.
     """
     url = urllib.parse.urlparse(source_url)
     params = dict(urllib.parse.parse_qsl(url.query))
-    params["resultsPerPage"] = str(max(1, max_items))
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=max(1, days))
+    params["pubStartDate"] = start.strftime("%Y-%m-%dT%H:%M:%S.000")
+    params["pubEndDate"] = end.strftime("%Y-%m-%dT%H:%M:%S.999")
+    params["resultsPerPage"] = str(max(1, results_per_page))
+    if start_index is not None:
+        params["startIndex"] = str(max(0, start_index))
     return urllib.parse.urlunparse(url._replace(query=urllib.parse.urlencode(params)))
 
 
-async def _fetch_nvd(source: Source, client: httpx.AsyncClient) -> list[FeedItem]:
-    # First, learn how many CVEs match this keyword so we can jump to the
-    # newest results (NVD returns keyword matches in ascending date order).
-    count_url = _nvd_latest_url(source.url, 1)
-    count_resp = await client.get(count_url)
-    count_resp.raise_for_status()
-    total = int(count_resp.json().get("totalResults") or 0)
-
-    url = urllib.parse.urlparse(source.url)
-    params = dict(urllib.parse.parse_qsl(url.query))
-    start_index = max(0, total - source.max_items)
-    params["resultsPerPage"] = str(source.max_items)
-    params["startIndex"] = str(start_index)
-    url = urllib.parse.urlunparse(url._replace(query=urllib.parse.urlencode(params)))
-
-    resp = await client.get(url)
-    resp.raise_for_status()
-    data = resp.json()
+def _nvd_items(data: dict[str, Any], source: Source) -> list[FeedItem]:
     items: list[FeedItem] = []
-    for wrapper in (data.get("vulnerabilities") or [])[: source.max_items]:
+    for wrapper in data.get("vulnerabilities") or []:
         cve = wrapper.get("cve", {})
         cve_id = cve.get("id", "")
         if not cve_id:
@@ -390,6 +387,33 @@ async def _fetch_nvd(source: Source, client: httpx.AsyncClient) -> list[FeedItem
             )
         )
     return items
+
+
+async def _fetch_nvd(source: Source, client: httpx.AsyncClient) -> list[FeedItem]:
+    days = max(1, settings.nvd_window_days)
+    # One page large enough to cover a whole week of matches for this keyword.
+    page_size = max(100, source.max_items * 10)
+    resp = await client.get(_nvd_window_url(source.url, page_size, days))
+    resp.raise_for_status()
+    data = resp.json()
+    total = int(data.get("totalResults") or 0)
+    items = _nvd_items(data, source)
+    if total > page_size:
+        # Rare: the window holds more matches than one page. Jump to the last
+        # page so the newest window CVEs are the ones kept (NVD lists matches
+        # in ascending publication order).
+        resp = await client.get(
+            _nvd_window_url(
+                source.url, source.max_items, days, start_index=max(0, total - source.max_items)
+            )
+        )
+        resp.raise_for_status()
+        items = _nvd_items(resp.json(), source)
+    items.sort(
+        key=lambda item: item.published or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return items[: source.max_items]
 
 
 async def _fetch_redhat(source: Source, client: httpx.AsyncClient) -> list[FeedItem]:
@@ -435,6 +459,96 @@ async def _fetch_redhat(source: Source, client: httpx.AsyncClient) -> list[FeedI
             )
         )
     return items
+
+
+# GitHub Advisory Database: one query per curated package, newest first.
+# The advisories API returns MEDIUM on current data and MODERATE on older
+# entries, so both map to the canonical "medium".
+GHSA_SEVERITY = {
+    "CRITICAL": "critical",
+    "HIGH": "high",
+    "MEDIUM": "medium",
+    "MODERATE": "medium",
+    "LOW": "low",
+}
+
+
+def _github_headers() -> dict[str, str]:
+    """GitHub API headers, adding the token when configured (rate limits)."""
+    headers = {"Accept": "application/vnd.github+json"}
+    if settings.github_token:
+        headers["Authorization"] = f"Bearer {settings.github_token}"
+    return headers
+
+
+def _ghsa_published(row: dict[str, Any]) -> datetime | None:
+    # The advisories *list* endpoint names the timestamps published_at /
+    # updated_at; single-advisory responses use published / updated.
+    raw = (
+        row.get("published_at")
+        or row.get("published")
+        or row.get("updated_at")
+        or row.get("updated")
+    )
+    if not raw:
+        return None
+    try:
+        return _ensure_aware(datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
+    except Exception:
+        return None
+
+
+async def _fetch_ghsa(source: Source, client: httpx.AsyncClient) -> list[FeedItem]:
+    """Fetch GitHub Security Advisories affecting one curated package.
+
+    The GitHub Advisory Database covers the cloud-native ecosystem
+    (containerd, runc, Helm, Argo CD, Istio) as GHSA entries with linked
+    CVEs. Only the curated package is queried: one request per package.
+    """
+    resp = await client.get(source.url, headers=_github_headers())
+    resp.raise_for_status()
+    rows = resp.json()
+    if not isinstance(rows, list):
+        return []
+    items: list[FeedItem] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ghsa_id = (row.get("ghsa_id") or "").strip()
+        cve_id = (row.get("cve_id") or "").strip().upper()
+        summary = (row.get("summary") or "").strip()
+        label = cve_id or ghsa_id
+        if not label:
+            continue
+        description = _truncate(_strip_html(row.get("description") or ""))
+        title = f"{label}: {summary}" if summary else label
+        text = f"{title} {description}"
+        cves = list(dict.fromkeys(([cve_id] if cve_id else []) + _extract_cves(text)))
+        severity = GHSA_SEVERITY.get((row.get("severity") or "").upper(), "unknown")
+        if severity == "unknown":
+            severity = _infer_severity(text)
+        tags = _infer_tags(text, source.tags, cves)
+        url = row.get("html_url") or f"https://github.com/advisories/{ghsa_id}"
+        items.append(
+            FeedItem(
+                id=_hash_item(url, title),
+                title=title,
+                summary=description or summary,
+                url=url,
+                source=source.name,
+                source_url=source.url,
+                published=_ghsa_published(row),
+                tags=tags,
+                cves=cves,
+                severity=severity,
+                urgent=severity in ("critical", "high") and "exploit" in tags,
+            )
+        )
+    items.sort(
+        key=lambda item: item.published or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return items[: source.max_items]
 
 
 # Connect-phase failures to upstream hosts are intermittently transient: the
@@ -493,6 +607,10 @@ async def _fetch_source_once(source: Source) -> list[FeedItem]:
 
         items, _ = await ossf.fetch_recent_reports()
         return items[: source.max_items]
+    if source.kind == "kev":
+        from . import enrich
+
+        return await enrich.fetch_recent_kev(source)
     async with http_client.client() as client:
         if source.kind == "rss":
             return await _fetch_rss(source, client)
@@ -500,6 +618,8 @@ async def _fetch_source_once(source: Source) -> list[FeedItem]:
             return await _fetch_nvd(source, client)
         if source.kind == "redhat-api":
             return await _fetch_redhat(source, client)
+        if source.kind == "ghsa":
+            return await _fetch_ghsa(source, client)
     return []
 
 

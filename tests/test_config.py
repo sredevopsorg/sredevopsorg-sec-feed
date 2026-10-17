@@ -20,6 +20,8 @@ def test_settings_defaults():
     assert s.rate_limit_per_minute == 120
     assert s.rate_limit_trust_proxy is True
     assert s.max_sse_subscribers == 100
+    assert s.nvd_window_days == 7
+    assert s.kev_source_days == 7
 
 
 def test_settings_cors_denies_by_default():
@@ -82,6 +84,13 @@ def test_settings_db_prepare_threshold_optional():
     assert Settings.from_env({"DB_PREPARE_THRESHOLD": ""}).db_prepare_threshold is None
     assert Settings.from_env({"DB_PREPARE_THRESHOLD": "not-a-number"}).db_prepare_threshold is None
     assert Settings.from_env({"DB_PREPARE_THRESHOLD": "0"}).db_prepare_threshold == 0
+
+
+def test_settings_source_windows_parsing():
+    s = Settings.from_env({"NVD_WINDOW_DAYS": "3", "KEV_SOURCE_DAYS": "14"})
+    assert s.nvd_window_days == 3
+    assert s.kev_source_days == 14
+    assert Settings.from_env({"NVD_WINDOW_DAYS": "nope"}).nvd_window_days == 7
 
 
 def test_settings_optional_values():

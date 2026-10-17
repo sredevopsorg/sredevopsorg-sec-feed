@@ -68,8 +68,10 @@ class Settings:
     max_sse_subscribers: int
     # Logging
     log_level: str
-    # OpenSSF Malicious Packages source
+    # Sources: GitHub token (OSSF + GHSA) and NVD/KEV recent windows
     github_token: str | None
+    nvd_window_days: int
+    kev_source_days: int
     # Alerting (all opt-in)
     discord_webhook_url: str | None
     slack_webhook_url: str | None
@@ -102,6 +104,8 @@ class Settings:
             max_sse_subscribers=_int(env.get("MAX_SSE_SUBSCRIBERS"), 100),
             log_level=env.get("LOG_LEVEL", "INFO"),
             github_token=env.get("GITHUB_TOKEN") or None,
+            nvd_window_days=_int(env.get("NVD_WINDOW_DAYS"), 7),
+            kev_source_days=_int(env.get("KEV_SOURCE_DAYS"), 7),
             discord_webhook_url=env.get("DISCORD_WEBHOOK_URL") or None,
             slack_webhook_url=env.get("SLACK_WEBHOOK_URL") or None,
             alert_email_to=env.get("ALERT_EMAIL_TO") or None,

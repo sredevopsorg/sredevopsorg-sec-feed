@@ -70,20 +70,39 @@ is hosted on a different origin from the API.
 | Ubuntu Security Notices | RSS | Linux |
 | Debian Security Advisories | RSS | Linux |
 | Red Hat CVE Database | JSON API | Linux / cloud |
-| Kubernetes Blog (security-filtered) | RSS | Kubernetes |
+| Kubernetes Official CVE Feed | RSS | Kubernetes |
+| Google Cloud Security Bulletins | RSS | Cloud |
+| Amazon Linux 2023 Advisories (ALAS) | RSS | Linux / cloud |
 | AWS Security Bulletins | RSS | Cloud |
 | CISA Cybersecurity Advisories (topic-filtered) | RSS | Threats |
 | NVD CVE 2.0 (`linux kernel`, `kubernetes`, `cloud` queries) | JSON API | CVE |
+| CISA KEV — newly exploited (last 7 days) | JSON API | Exploited in the wild |
+| GHSA — containerd, runc, Helm, Argo CD, Istio | GitHub Advisory API | Kubernetes / cloud-native |
 | OpenSSF Malicious Packages (recent commits) | GitHub API | Supply-chain malware |
 | ZDI Published Advisories | RSS | Exploit / zero-day |
 | ZDI Upcoming Advisories | RSS | Exploit / zero-day |
 
 ### Notes on source handling
 
-- The NVD keyword API returns oldest matches first, so the fetcher reads
-  `totalResults` and requests the last page to obtain the newest CVEs.
-- CISA and the Kubernetes blog are broad feeds, so items are filtered for
-  Linux/cloud/Kubernetes relevance before entering the feed.
+- The Kubernetes Official CVE Feed is generated from the `official-cve-feed`
+  label on `kubernetes/kubernetes` issues; it replaces the old filtered
+  Kubernetes Blog feed and carries CVE items directly.
+- NVD queries use a bounded `pubStartDate` window (`NVD_WINDOW_DAYS`, default
+  7). One page covers the whole window for every keyword we query, so a
+  refresh costs one request per NVD source; a rare overflow probes the last
+  page instead.
+- CISA is the only broad feed still filtered for relevance: its ICS/OT
+  advisories are dropped.
+- The CISA KEV source publishes catalog entries added in the last
+  `KEV_SOURCE_DAYS` (default 7) days. They are urgent by definition, and they
+  close the gap for exploited CVEs that no keyword feed mentions — enrichment
+  alone only flags CVEs another source already published.
+- The GHSA sources issue one GitHub Advisory Database query per curated
+  package (`containerd`, `runc`, `helm`, `argo-cd`, `istio`). Add a package
+  by appending a `Source` in `app/sources.py`; set `GITHUB_TOKEN` to raise
+  the unauthenticated 60-request/hour limit.
+- Amazon Linux 2023 publishes its full errata history in one feed (~1.5 MB);
+  items are capped by `max_items`.
 - OpenSSF Malicious Packages uses the GitHub API and only processes new
   commits (no 1 GB clone). Set `GITHUB_TOKEN` to avoid unauthenticated rate
   limits. By default only Go/git ecosystems or packages mentioning
@@ -107,7 +126,7 @@ is hosted on a different origin from the API.
 │   ├── sources.py        # Source definitions
 │   ├── fetcher.py        # Fetching + normalization of upstream sources
 │   ├── pipeline.py       # Refresh orchestration: fetch → enrich → persist → index → publish → alert
-│   ├── enrich.py         # CISA KEV + EPSS enrichment
+│   ├── enrich.py         # CISA KEV + EPSS enrichment; KEV source builder
 │   ├── osv.py            # OSV.dev enrichment (affected/fixed/severity)
 │   ├── search.py         # Search backend (OpenSearch + SQL fallback)
 │   ├── ossf.py           # OpenSSF Malicious Packages GitHub-API source
@@ -286,6 +305,14 @@ Without any channel configured, urgent items are logged only.
 | `RATE_LIMIT_PER_MINUTE` | `120` | Per-client limit for `/api/search` and `/api/events`; `0` disables |
 | `RATE_LIMIT_TRUST_PROXY` | `true` | Key on the last `X-Forwarded-For` hop (set `false` when the API is directly reachable) |
 | `MAX_SSE_SUBSCRIBERS` | `100` | Concurrent `/api/events` subscribers before `503`; `0` disables the cap |
+
+### Source tuning environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GITHUB_TOKEN` | unset | Raises GitHub API limits for OpenSSF Malicious Packages and the GHSA sources |
+| `NVD_WINDOW_DAYS` | `7` | Publication window per NVD query; the newest CVEs inside it enter the feed |
+| `KEV_SOURCE_DAYS` | `7` | How recently a CISA KEV addition must be added to enter the feed as an urgent item |
 
 ### PostgreSQL + OpenSearch via Compose
 
@@ -529,12 +556,14 @@ while no live source is reachable.
 
 - **Tags** are inferred from source scope plus title/summary keywords. The
   core set is `linux`, `cloud`, `kubernetes`, `cve`, `exploit`, `patch`,
-  `threat`; enrichment adds `kev` for CISA KEV hits, the OpenSSF source adds
-  `malware`, `supply-chain`, `malicious-packages` plus the affected ecosystem
-  (`go`, `npm`, …, lowercased), and the ZDI sources add `zeroday`.
+  `threat`; enrichment and the KEV source add `kev` for known-exploited CVEs,
+  the OpenSSF source adds `malware`, `supply-chain`, `malicious-packages`
+  plus the affected ecosystem (`go`, `npm`, …, lowercased), and the ZDI
+  sources add `zeroday`.
 - **Severity** comes from CVSS when available, otherwise from textual heuristics.
-- **Urgent** items are critical/high-severity and exploitation-related; they
-  render the red dot in the UI.
+- **Urgent** items are critical/high-severity and exploitation-related, plus
+  every KEV-source item (CISA has confirmed exploitation); they render the red
+  dot in the UI.
 - **KEV** items are in CISA's Known Exploited Vulnerabilities catalog.
 - **EPSS** is fetched from FIRST when CVEs are present (best-effort, first
   100 unique CVEs per refresh). `epss_score` is `null` when the score is
