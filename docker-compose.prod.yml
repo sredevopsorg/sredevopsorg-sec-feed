@@ -16,13 +16,13 @@ services:
     restart: always
 
   api:
-    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:7b3848cb812df0d55b9161d83caabe3775a545244acecf9fb205790360bd2169
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:ed75989086760baff4c7f9dc02a2b3e593515750df3025889131298e89815980
     pull_policy: always
     restart: always
 
   # Same image as the API; runs only the one-shot migration job.
   migrate:
-    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:7b3848cb812df0d55b9161d83caabe3775a545244acecf9fb205790360bd2169
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:ed75989086760baff4c7f9dc02a2b3e593515750df3025889131298e89815980
     pull_policy: always
     restart: "no"
 
