@@ -20,9 +20,13 @@ container-first (Docker/Podman); a host Python install is optional.
 cp .env.example .env   # then set POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
 docker compose up --build
 
-# Run tests (host)
-pip install -r requirements-dev.txt
-pytest -q
+# Run tests (host; requires uv 0.13.1+)
+uv sync --frozen
+uv run --frozen pytest -q
+
+# Refresh the lock after editing pyproject.toml
+uv lock --upgrade
+uv lock --check
 
 # Production (published, non-root images; run `docker compose pull` first)
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
@@ -71,15 +75,19 @@ frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step)
 tests/             Unit tests: feed/enrichment, models, store, search, config, HTTP
                    policy, API, pipeline, OSV/OSSF, alerts, rate limiting
 docs/              Architecture review (docs/architecture.md) + ADRs (docs/adr/)
+                   and the Supabase migration analysis
+                   (docs/supabase-migration-plan.md)
 deploy/k8s/        Kubernetes manifests (api, frontend, NetworkPolicy;
                    postgres/PDB/Ingress/OpenSearch ship commented out of
                    kustomization.yaml; secret.example.yaml is a template and is
                    NOT applied by kustomize)
-.github/workflows/ CI (pytest on Python 3.13), CodeQL, container image builds
+.github/workflows/ CI (uv lock check, frozen pytest, pip-audit on Python 3.13),
+                   CodeQL, container image builds
 docker-compose.yml           Base services (local build; UI host port 8080; reads .env)
 docker-compose.prod.yml      Production overrides (digest-pinned GHCR images)
 .env.example                 Template for the gitignored .env (Postgres credentials)
-requirements-dev.txt         Test/dev dependencies
+pyproject.toml               Direct dependencies + dev group + uv settings
+uv.lock                      Committed, hash-locked dependency graph
 ```
 
 ## Critical invariants
@@ -113,7 +121,8 @@ requirements-dev.txt         Test/dev dependencies
 3. Add relevance filtering if the feed is broader than Linux/cloud/Kubernetes
    (see `_is_relevant()`).
 4. Add a unit test for the normalization/filtering logic with fixture data.
-5. Update the Sources table in `README.md`.
+5. Update the Sources table in `README.md` (including source-specific tags such
+   as `zeroday` for the ZDI feeds).
 6. Enrichment (KEV/EPSS) is optional and best-effort; new enrichment goes in
    `app/enrich.py` and must never fail the whole refresh.
 7. Alerting is opt-in. Discord webhook is the first/primary alert option
@@ -155,6 +164,12 @@ requirements-dev.txt         Test/dev dependencies
 18. **Search input is escaped, not interpolated.** `%`/`_` in `/api/search`
     are escaped before being wrapped in `%...%`; keep both storage adapters in
     step and keep queries parameterized.
+19. **Dependencies are locked and hash-verified.** `pyproject.toml` is the only
+    direct-dependency input; `uv.lock` is the committed resolved graph. Docker
+    and CI install with `uv sync --frozen`; a stale lock fails
+    `uv lock --check`. Refresh with `uv lock --upgrade`, run the tests and
+    runtime audit, and commit both files. Do not add `requirements*.txt` or
+    install packages ad hoc.
 
 ## Feed item contract
 
@@ -167,7 +182,7 @@ Every item must be normalized to the `FeedItem` dataclass in
 - `tags` — core set `linux`, `cloud`, `kubernetes`, `cve`, `exploit`,
   `patch`, `threat`; KEV enrichment adds `kev`; the OpenSSF source adds
   `malware`, `supply-chain`, `malicious-packages` and the lowercased ecosystem
-  (`go`, `npm`, …)
+  (`go`, `npm`, …); the ZDI sources add `zeroday`
 - `cves` — list of uppercase CVE IDs, e.g. `["CVE-2024-21626"]`
 - `severity` — `critical` | `high` | `medium` | `low` | `unknown`
 - `urgent` — boolean, drives the red dot in the UI
@@ -210,12 +225,16 @@ emits `is_sample`.
   `startIndex` approach already implemented in `_fetch_nvd()`.
 - **CISA feed noise.** CISA publishes ICS/OT advisories too; keep the
   topic filter in `_is_relevant()` when touching that source.
+- **Lockfiles are generated.** Never hand-edit `uv.lock`; edit
+  `pyproject.toml`, re-lock, and commit both files.
 
 ## Definition of done
 
-- [ ] `pip install -r requirements-dev.txt && pytest -q` is green
+- [ ] `uv lock --check`, `uv sync --frozen`, and `uv run --frozen pytest -q` are green
+- [ ] Runtime audit is clean (CI runs `pip-audit`)
 - [ ] Server starts and `/health` returns `{"status":"ok"}`
 - [ ] `/api/feed` returns valid items (or sample fallback) without waiting on a refresh
+- [ ] Docker image builds from the frozen lock
 - [ ] Frontend edits: `node --check frontend/app.js`, no new dependency, no `alert()` placeholders
 - [ ] README (sources table, API tables, item schema) and AGENTS.md updated when
       behaviour, ports, invariants, or the item contract change

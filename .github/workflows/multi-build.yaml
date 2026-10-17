@@ -6,8 +6,9 @@ on:
       - main
     paths:
       - Dockerfile
-      - requirements.txt
-      - app/*
+      - pyproject.toml
+      - uv.lock
+      - app/**
       - .github/workflows/multi-build.yaml
     tags:
       - v*

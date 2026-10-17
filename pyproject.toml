@@ -1,0 +1,23 @@
+[project]
+name = "sredevopsorg-sec-feed"
+version = "0.2.0rc1"
+description = "Security intelligence feed for Linux, cloud, and Kubernetes"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "fastapi==0.143.3",
+  "uvicorn==0.54.0",
+  "feedparser==6.0.14",
+  "httpx==0.28.1",
+  "psycopg[binary]==3.3.6",
+  "psycopg-pool==3.3.3",
+]
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+  "pip-audit==2.10.1",
+]
+
+[tool.uv]
+package = false

@@ -8,15 +8,15 @@
 # The `api`/`web` images are pinned to immutable digests for reproducibility.
 # To move to a newer release, look up the digest for the tag you want, e.g.:
 #   docker buildx imagetools inspect ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
-# then replace the sha256 below (Renovate can also be configured to bump these).
+# then replace the sha256 below (Renovate also raises PRs for these).
 services:
   web:
-    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web@sha256:34723cfe4aeee818a7a09a9ba99bbfc5ac33242c2ec1bf7712ac290fab665bac
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web@sha256:c58d6454200ab66c4ad6f52401c999abf3ac1c915468104ab306d26772733719
     pull_policy: always
     restart: always
 
   api:
-    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:52a8b3cbdba3492f3e7543125dec5d9a7111a862fc905f35c403aefe84d54078
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:7b3848cb812df0d55b9161d83caabe3775a545244acecf9fb205790360bd2169
     pull_policy: always
     restart: always
 

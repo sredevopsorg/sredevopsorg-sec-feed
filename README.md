@@ -31,13 +31,19 @@ extracted, and the refresh runs as an explicit
 `fetch → enrich → persist → index → publish → alert` pipeline.
 
 A follow-up audit fixed the correctness, redundancy and deployment/doc drift
-found afterwards; those changes are listed under [Audit fixes](#audit-fixes-2025-09-one-pr-per-item).
+found afterwards; those changes are listed in the
+[architecture delivery record](docs/architecture.md#follow-up-audit-2025-09).
+
+Dependencies are declared in `pyproject.toml` and hash-locked in the committed
+`uv.lock`; Docker and CI install from that lock with `uv sync --frozen`
+([ADR-0006](docs/adr/0006-uv-lock-and-dependency-policy.md)).
 
 ## Stack
 
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.13, FastAPI, httpx, feedparser |
+| Dependencies | `pyproject.toml` direct pins + committed `uv.lock` (hash-locked; `uv sync --frozen`) |
 | Frontend | Static HTML/CSS/JS in `frontend/`, served by non-root nginx (UID 101, port 8080) — no build step, no CDN |
 | Storage | PostgreSQL primary store, SQLite fallback, in-memory cache |
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
@@ -67,8 +73,10 @@ is hosted on a different origin from the API.
 | Kubernetes Blog (security-filtered) | RSS | Kubernetes |
 | AWS Security Bulletins | RSS | Cloud |
 | CISA Cybersecurity Advisories (topic-filtered) | RSS | Threats |
-| NVD CVE 2.0 (`linux kernel`, `kubernetes`, `cloud`) | JSON API | CVE |
+| NVD CVE 2.0 (`linux kernel`, `kubernetes`, `cloud` queries) | JSON API | CVE |
 | OpenSSF Malicious Packages (recent commits) | GitHub API | Supply-chain malware |
+| ZDI Published Advisories | RSS | Exploit / zero-day |
+| ZDI Upcoming Advisories | RSS | Exploit / zero-day |
 
 ### Notes on source handling
 
@@ -80,6 +88,9 @@ is hosted on a different origin from the API.
   commits (no 1 GB clone). Set `GITHUB_TOKEN` to avoid unauthenticated rate
   limits. By default only Go/git ecosystems or packages mentioning
   Linux/cloud/Kubernetes tooling are included.
+- ZDI Published and Upcoming are exploit/zero-day focused and are ingested
+  without the Linux/cloud/Kubernetes relevance filter; their items carry the
+  `zeroday` tag.
 - If a source fails, the rest of the feed continues. If **all** live sources
   fail, the server serves realistic sample items so the UI is always usable.
 
@@ -90,6 +101,7 @@ is hosted on a different origin from the API.
 ├── app/
 │   ├── __init__.py       # Package marker
 │   ├── config.py         # Centralized Settings (ADR-0002)
+│   ├── http_client.py    # Shared outbound user agent + bounded timeouts
 │   ├── models.py         # Domain model (FeedItem) + serialization (ADR-0004)
 │   ├── main.py           # FastAPI API routes (pure JSON API)
 │   ├── sources.py        # Source definitions
@@ -130,7 +142,8 @@ is hosted on a different origin from the API.
 │   └── test_pipeline.py  # Refresh pipeline
 ├── docs/
 │   ├── architecture.md   # Architecture review (C4) + delivery record
-│   └── adr/              # Architecture Decision Records
+│   ├── adr/              # Architecture Decision Records
+│   └── supabase-migration-plan.md # Hosted-Postgres analysis (partially implemented)
 ├── deploy/
 │   └── k8s/              # Kubernetes manifests (api, frontend, NetworkPolicy,
 │                         #   postgres/PDB/Ingress/OpenSearch optional;
@@ -139,8 +152,8 @@ is hosted on a different origin from the API.
 ├── docker-compose.yml    # Base services (local build; reads .env)
 ├── docker-compose.prod.yml # Production overrides (digest-pinned images)
 ├── .env.example          # Template for the gitignored .env
-├── requirements.txt      # Runtime dependencies (pinned)
-├── requirements-dev.txt  # Test/dev dependencies (pinned)
+├── pyproject.toml        # Project metadata + direct dependencies
+├── uv.lock               # Committed hash-locked dependency graph
 ├── README.md
 └── AGENTS.md
 ```
@@ -218,12 +231,39 @@ response.
 
 ### Run without containers (optional)
 
+Install [uv](https://docs.astral.sh/uv/) 0.13.1 or newer, then:
+
 ```bash
-pip install -r requirements-dev.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+uv sync --frozen
+uv run --frozen uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 This starts the API only (no UI); serve `frontend/` with any static file server.
+
+### Dependency management
+
+Direct dependencies live in `pyproject.toml`; the full resolved graph is
+committed in `uv.lock` with hashes. Docker and CI install only from that lock.
+
+```bash
+uv lock                 # re-resolve after editing pyproject.toml
+uv lock --upgrade       # refresh transitive dependencies
+uv lock --check         # verify the lock matches pyproject.toml
+uv sync --frozen        # install exactly the locked graph (incl. dev tools)
+uv run --frozen pytest -q
+```
+
+To audit the runtime graph (CI runs the same check):
+
+```bash
+uv sync --frozen --no-dev
+uvx --from pip-audit==2.10.1 pip-audit \
+  --path .venv/lib/python3.13/site-packages --strict
+uv sync --frozen        # restore the dev tools afterwards
+```
+
+`uv.lock` is generated and must never be edited by hand. Renovate updates both
+`pyproject.toml` and `uv.lock`, and lock-file maintenance refreshes transitives.
 
 ### Alerting environment variables
 
@@ -489,9 +529,9 @@ while no live source is reachable.
 
 - **Tags** are inferred from source scope plus title/summary keywords. The
   core set is `linux`, `cloud`, `kubernetes`, `cve`, `exploit`, `patch`,
-  `threat`; enrichment adds `kev` for CISA KEV hits, and the OpenSSF source adds
+  `threat`; enrichment adds `kev` for CISA KEV hits, the OpenSSF source adds
   `malware`, `supply-chain`, `malicious-packages` plus the affected ecosystem
-  (`go`, `npm`, …, lowercased).
+  (`go`, `npm`, …, lowercased), and the ZDI sources add `zeroday`.
 - **Severity** comes from CVSS when available, otherwise from textual heuristics.
 - **Urgent** items are critical/high-severity and exploitation-related; they
   render the red dot in the UI.
@@ -511,11 +551,13 @@ while no live source is reachable.
 ## Tests
 
 ```bash
-pip install -r requirements-dev.txt
-pytest -q
+uv sync --frozen
+uv run --frozen pytest -q
 ```
 
-CI runs the same command on Python 3.13 (`.github/workflows/ci.yaml`). The
-frontend has no build step or test runner; `node --check frontend/app.js` is the
-syntax check used when editing it.
+CI runs on Python 3.13 (`.github/workflows/ci.yaml`): it verifies the lock with
+`uv lock --check`, installs the frozen lock, runs `uv pip check`, runs the
+tests, and audits the runtime graph with `pip-audit`. The frontend has no build
+step or test runner; `node --check frontend/app.js` is the syntax check used
+when editing it.
 

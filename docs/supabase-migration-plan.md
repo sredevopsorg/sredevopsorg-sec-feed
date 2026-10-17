@@ -1,17 +1,25 @@
 # Proposal — Supabase as the Postgres provider, and which Supabase features earn their place
 
-Status: **Proposed** (not implemented, no code written)
-Date: 2026-09-16
-Supersedes: nothing. Amends nothing yet — see [ADR-0005](./adr/0005-supabase-hosted-postgres.md) for the decision record stub.
+Status: **Partially implemented** (Phase 1 landed; Phases 2–5 proposed)
+Date: 2026-09-16 (implementation update 2026-10-17)
+Supersedes: nothing. See [ADR-0005](./adr/0005-supabase-hosted-postgres.md) for the decision record.
 
 > Every Supabase claim below was verified against the current official docs on
 > 2026-09-16 (URLs inline). Supabase ships breaking changes frequently, so
 > re-verify before implementing.
+>
+> **Implementation update (2026-10-17).** Phase 1 has landed: connection
+> pooling, single-predicate sample hiding, single-query `stats()`, single-
+> statement DDL, and Postgres adapter tests are all in the repository. The
+> "what we have today" findings in §1.1–1.3 describe the pre-Phase-1 state and
+> are retained as the rationale that motivated the change. The hosted cutover,
+> versioned migrations, least-privilege role, and backups remain proposed.
 
 ## 1. What we actually have today (measured, not assumed)
 
-`app/postgres_store.py` is **328 lines** exposing **11 functions** through the
-`Storage` port in `app/store.py` (ADR-0003):
+At the time of this analysis, `app/postgres_store.py` was **328 lines**
+exposing **11 functions** through the `Storage` port in `app/store.py`
+(ADR-0003):
 
 | Group | Functions |
 |---|---|
