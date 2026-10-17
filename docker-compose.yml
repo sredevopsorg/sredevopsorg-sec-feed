@@ -28,19 +28,22 @@ services:
     container_name: api
     hostname: api
     environment:
-      # Self-hosted PostgreSQL. Credentials come from `.env` (see .env.example);
-      # the whole stack fails to start when they are missing. To run without
-      # PostgreSQL, comment out DATABASE_URL and the app falls back to SQLite.
+      # Local PostgreSQL for `docker compose up`. To run against hosted
+      # Supabase instead, use the overlay (which also skips the local database):
+      #   docker compose -f docker-compose.yml -f docker-compose.supabase.yml up --build
       - DATABASE_URL=postgresql://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
-      # Hosted Supabase (session-mode pooler; copy the exact host from the
-      # dashboard "Connect" dialog and use the `postgres.PROJECT-REF` user):
-      # - DATABASE_URL=postgresql://postgres.PROJECT-REF:PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres
-      # - DB_SSLMODE=require
+      # The local postgres service has no TLS; the API is on the same bridge.
+      - DB_SSLMODE=prefer
       # Optional Postgres pool tuning (defaults shown):
       # - DB_POOL_MIN_SIZE=1
       # - DB_POOL_MAX_SIZE=4
+      # - DB_POOL_TIMEOUT=30
       # - DB_CONNECT_TIMEOUT=10
       # - DB_APPLICATION_NAME=security-feed
+      # - DB_STATEMENT_TIMEOUT_MS=15000
+      # - DB_IDLE_TX_TIMEOUT_MS=30000
+      # - DB_LOCK_TIMEOUT_MS=5000
+      # - DB_SSLROOTCERT=/etc/ssl/supabase/prod-supabase.cer
       # Prepared statements are off by default (safe for any pooler mode). Set
       # DB_PREPARE_THRESHOLD=5 only on a direct or session-mode connection.
       # - DB_PREPARE_THRESHOLD=5
@@ -63,21 +66,19 @@ services:
       # Uncomment and run `docker compose --profile search up --build` to use
       # the optional OpenSearch search backend.
       # - OPENSEARCH_URL=http://opensearch:9200
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     volumes:
       - feed-data:/app/data
-    # depends_on:
-    #   postgres:
-    #     condition: service_healthy
-    #   postgres-init:
-    #     condition: service_completed_successfully
-    # No curl in the slim image; probe /health with the stdlib only. The web
+    # No curl in the slim image; probe readiness with the stdlib only. The web
     # service waits for this healthcheck before serving.
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"
       interval: 10s
       timeout: 5s
       retries: 5
@@ -85,6 +86,22 @@ services:
     restart: unless-stopped
     ports:
       - 8000:8000
+    networks:
+      - sredevops-sec-feed
+
+  # One-shot schema migration job. It runs before the API starts and is
+  # idempotent. It retries the connection itself, so it works whether the
+  # database is the local `postgres` service or hosted Supabase (overlay).
+  # The admin DSN lives only in this service, never in the API container.
+  migrate:
+    build: .
+    container_name: migrate
+    command: ["python", "-m", "app.migrate", "upgrade"]
+    environment:
+      - ADMIN_DATABASE_URL=postgresql://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
+      - DB_SSLMODE=prefer
+    # One-shot job: it must not restart after it succeeds.
+    restart: "no"
     networks:
       - sredevops-sec-feed
 

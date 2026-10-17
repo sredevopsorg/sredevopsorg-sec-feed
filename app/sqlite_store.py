@@ -352,5 +352,12 @@ def set_source_cursor(source_id: str, cursor: str, db_path: str = DB_PATH) -> No
         )
 
 
+def ping(db_path: str = DB_PATH) -> bool:
+    """Cheap readiness probe for the SQLite backend."""
+    with _connect(db_path) as conn:
+        conn.execute("SELECT 1").fetchone()
+    return True
+
+
 def close() -> None:
     """No-op: SQLite connections are opened and closed per call."""

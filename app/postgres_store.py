@@ -8,6 +8,10 @@ Connections come from a lazy ``psycopg_pool.ConnectionPool`` rather than a new
 connection per call: against a remote provider (Supabase) every call would
 otherwise pay a full TLS handshake. The pool is created on first use and closed
 by ``close()`` (called from the FastAPI lifespan shutdown hook).
+
+Schema management is deliberately absent here: ``init_db()`` only verifies that
+the checked-in migrations have been applied. Apply them with
+``python -m app.migrate upgrade`` (compose runs it as a one-shot job).
 """
 
 from __future__ import annotations
@@ -20,9 +24,11 @@ from typing import Any, Iterator
 
 import psycopg
 from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 from . import config
+from .errors import SchemaNotMigrated, StoreUnavailable
+from .migrate import latest_version
 from .models import FeedItem, _ensure_aware, _sample_items, item_to_dict
 
 logger = logging.getLogger(__name__)
@@ -32,8 +38,28 @@ logger = logging.getLogger(__name__)
 # only — it cannot be expressed in the connection string (libpq rejects it), and
 # the default of ``None`` disables prepared statements, which keeps the adapter
 # safe through transaction-mode poolers and avoids ``executemany`` preparing
-# ``_pg3_0`` on its first row.
+# ``_pg3_0`` on its first row. Session-mode connections may safely enable it
+# via ``DB_PREPARE_THRESHOLD=5``.
 _POOL: ConnectionPool | None = None
+
+
+def _configure_connection(conn: psycopg.Connection) -> None:
+    """Apply per-session guards that a pooler will not deliver via DSN options.
+
+    Supavisor ignores libpq's ``options`` startup parameter (verified: the
+    session reports ``application_name=Supavisor`` and the server default
+    ``statement_timeout=2min``). A committed ``SET`` does survive the pooled
+    session, so set and commit it here. Do not add a pool ``reset`` callback:
+    that would discard these session settings on every check-in.
+    """
+    s = config.settings
+    for name, value in (
+        ("statement_timeout", s.db_statement_timeout_ms),
+        ("idle_in_transaction_session_timeout", s.db_idle_tx_timeout_ms),
+        ("lock_timeout", s.db_lock_timeout_ms),
+    ):
+        conn.execute(f"SET {name} = {int(value)}")
+    conn.commit()
 
 
 def _ensure_pool() -> ConnectionPool:
@@ -43,17 +69,24 @@ def _ensure_pool() -> ConnectionPool:
         dsn = s.database_url or ""
         if not dsn:
             raise RuntimeError("DATABASE_URL is not set; cannot use the PostgreSQL backend")
+        kwargs: dict[str, Any] = {
+            "row_factory": dict_row,
+            "prepare_threshold": s.db_prepare_threshold,
+            "connect_timeout": s.db_connect_timeout,
+            "sslmode": s.db_sslmode,
+            "application_name": s.db_application_name,
+        }
+        if s.db_sslrootcert:
+            kwargs["sslrootcert"] = s.db_sslrootcert
         _POOL = ConnectionPool(
             dsn,
-            kwargs={
-                "row_factory": dict_row,
-                "prepare_threshold": s.db_prepare_threshold,
-                "connect_timeout": s.db_connect_timeout,
-                "sslmode": s.db_sslmode,
-                "application_name": s.db_application_name,
-            },
+            kwargs=kwargs,
             min_size=s.db_pool_min_size,
             max_size=s.db_pool_max_size,
+            timeout=s.db_pool_timeout,
+            max_idle=s.db_pool_max_idle,
+            max_lifetime=s.db_pool_max_lifetime,
+            configure=_configure_connection,
             # `open=True` fills min_size connections in the background without
             # blocking; the pool itself is only built lazily, on first use.
             open=True,
@@ -63,8 +96,13 @@ def _ensure_pool() -> ConnectionPool:
 
 @contextmanager
 def _connection() -> Iterator[psycopg.Connection]:
-    with _ensure_pool().connection() as conn:
-        yield conn
+    try:
+        with _ensure_pool().connection() as conn:
+            yield conn
+    except (psycopg.OperationalError, PoolTimeout) as exc:
+        # Translate driver-level connection failures into a stable API contract
+        # (503) instead of leaking a psycopg exception from a route.
+        raise StoreUnavailable("database unavailable") from exc
 
 
 def close() -> None:
@@ -80,90 +118,9 @@ def _reset_pool() -> None:
     close()
 
 
-# Schema is a list of single statements. Executing each individually (rather
-# than one multi-statement string) removes the reliance on the simple-query
-# protocol fallback and stays correct under any ``prepare_threshold``.
-_SCHEMA_STATEMENTS = (
-    """
-    CREATE TABLE IF NOT EXISTS feed_items (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        summary TEXT NOT NULL DEFAULT '',
-        url TEXT NOT NULL DEFAULT '',
-        source TEXT NOT NULL DEFAULT '',
-        source_url TEXT NOT NULL DEFAULT '',
-        published TIMESTAMPTZ,
-        tags JSONB NOT NULL DEFAULT '[]',
-        cves JSONB NOT NULL DEFAULT '[]',
-        severity TEXT NOT NULL DEFAULT 'unknown',
-        urgent BOOLEAN NOT NULL DEFAULT FALSE,
-        kev BOOLEAN NOT NULL DEFAULT FALSE,
-        epss_score DOUBLE PRECISION,
-        is_sample BOOLEAN NOT NULL DEFAULT FALSE,
-        osv_affected JSONB NOT NULL DEFAULT '[]',
-        osv_fixed JSONB NOT NULL DEFAULT '[]',
-        osv_severity TEXT,
-        patch_status TEXT NOT NULL DEFAULT 'unknown',
-        first_seen TIMESTAMPTZ NOT NULL,
-        last_seen TIMESTAMPTZ NOT NULL
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_published ON feed_items(published DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_urgent ON feed_items(urgent DESC)",
-    """
-    CREATE TABLE IF NOT EXISTS alerted_items (
-        item_id TEXT PRIMARY KEY,
-        created_at TIMESTAMPTZ NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS source_cursors (
-        source_id TEXT PRIMARY KEY,
-        cursor TEXT NOT NULL,
-        updated_at TIMESTAMPTZ NOT NULL
-    )
-    """,
-)
+# ``init_db`` verifies the schema produced by ``migrations/0001_baseline.sql``.
+_REQUIRED_TABLES = ("feed_items", "alerted_items", "source_cursors")
 
-# Lightweight migrations for databases created before these columns existed
-# (kept in step with app/sqlite_store.py).
-_COLUMN_MIGRATIONS = (
-    "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS is_sample BOOLEAN NOT NULL DEFAULT FALSE",
-    "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS kev BOOLEAN NOT NULL DEFAULT FALSE",
-    "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS epss_score DOUBLE PRECISION",
-    "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS osv_affected JSONB NOT NULL DEFAULT '[]'",
-    "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS osv_fixed JSONB NOT NULL DEFAULT '[]'",
-    "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS osv_severity TEXT",
-    "ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS patch_status TEXT NOT NULL DEFAULT 'unknown'",
-)
-
-# pg_trgm powers the trigram GIN indexes used by the ILIKE search path
-# (CVE-substring matching in particular, which to_tsvector tokenizes poorly).
-_EXTENSION_STATEMENTS = (
-    "CREATE SCHEMA IF NOT EXISTS extensions",
-    "CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions",
-)
-
-# Indexes for the queries this adapter actually runs (see the
-# supabase-postgres-best-practices rules for jsonb GIN and trigram indexing).
-_INDEX_STATEMENTS = (
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_tags ON feed_items USING gin (tags jsonb_path_ops)",
-    # Schema-qualify gin_trgm_ops: the extension lives in the `extensions`
-    # schema, which is not on postgres:16-alpine's default search_path.
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_title_trgm ON feed_items USING gin (title extensions.gin_trgm_ops)",
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_summary_trgm ON feed_items USING gin (summary extensions.gin_trgm_ops)",
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_cves_trgm ON feed_items USING gin ((cves::text) extensions.gin_trgm_ops)",
-    "CREATE INDEX IF NOT EXISTS idx_feed_items_severity ON feed_items (severity)",
-)
-
-# RLS is defence in depth: the app connects as the table owner (which bypasses
-# RLS), and the tables are never exposed to the Supabase Data API. Enabling RLS
-# with no policies denies every non-owner role by default.
-_RLS_STATEMENTS = (
-    "ALTER TABLE feed_items ENABLE ROW LEVEL SECURITY",
-    "ALTER TABLE alerted_items ENABLE ROW LEVEL SECURITY",
-    "ALTER TABLE source_cursors ENABLE ROW LEVEL SECURITY",
-)
 
 
 def _jsonb(value: Any) -> str:
@@ -193,15 +150,41 @@ def _escape_like(value: str) -> str:
 
 
 def init_db(db_path: str = "") -> None:
+    """Verify that the checked-in migrations have been applied.
+
+    This function intentionally performs no DDL: schema creation at API startup
+    races across replicas and requires the runtime role to own the schema. Run
+    ``python -m app.migrate upgrade`` (compose runs it as a one-shot job) before
+    starting the API.
+    """
+    expected = latest_version()
     with _connection() as conn:
-        for statement in (
-            *_SCHEMA_STATEMENTS,
-            *_COLUMN_MIGRATIONS,
-            *_EXTENSION_STATEMENTS,
-            *_INDEX_STATEMENTS,
-            *_RLS_STATEMENTS,
-        ):
-            conn.execute(statement)
+        tracking = conn.execute("SELECT to_regclass(%s) AS t", ("public.feed_schema_migrations",)).fetchone()
+        if not tracking or not tracking["t"]:
+            raise SchemaNotMigrated(
+                "feed_schema_migrations is missing; run `python -m app.migrate upgrade`"
+            )
+        row = conn.execute("SELECT max(version) AS version FROM feed_schema_migrations").fetchone()
+        applied = row["version"] if row else None
+        missing = [
+            table
+            for table in _REQUIRED_TABLES
+            if conn.execute("SELECT to_regclass(%s) AS t", (f"public.{table}",)).fetchone()["t"] is None
+        ]
+    if applied != expected or missing:
+        detail = f"applied={applied!r}, expected={expected!r}"
+        if missing:
+            detail += f", missing tables={missing}"
+        raise SchemaNotMigrated(
+            f"database schema is not current ({detail}); run `python -m app.migrate upgrade`"
+        )
+
+
+def ping(db_path: str = "") -> bool:
+    """Cheap readiness probe: prove a pooled connection answers a query."""
+    with _connection() as conn:
+        conn.execute("SELECT 1").fetchone()
+    return True
 
 
 def seed_if_empty(db_path: str = "") -> int:

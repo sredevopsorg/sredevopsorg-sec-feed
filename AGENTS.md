@@ -20,7 +20,14 @@ container-first (Docker/Podman); a host Python install is optional.
 cp .env.example .env   # then set POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
 docker compose up --build
 
-# Run tests (host; requires uv 0.13.1+)
+# Hosted Supabase (uses DATABASE_URL + ADMIN_DATABASE_URL from .env; skips local DB)
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml up --build
+
+# Schema migrations (the API never creates DDL; compose runs this as a job)
+ADMIN_DATABASE_URL=... uv run python -m app.migrate upgrade
+ADMIN_DATABASE_URL=... uv run python -m app.migrate check
+
+# Run tests (host; requires uv 0.13.1+; set TEST_DATABASE_URL for Postgres tests)
 uv sync --frozen
 uv run --frozen pytest -q
 
@@ -31,7 +38,7 @@ uv lock --check
 # Production (published, non-root images; run `docker compose pull` first)
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
-# Deploy to Kubernetes
+# Deploy to Kubernetes (apply the optional migrate Job when using DATABASE_URL)
 kubectl apply -k deploy/k8s
 ```
 
@@ -65,7 +72,10 @@ app/search.py      Search backend (OpenSearch if configured, SQL fallback)
 app/ossf.py         OpenSSF Malicious Packages source (GitHub API + cursor)
 app/store.py       Storage facade/port (selects sqlite or postgres backend)
 app/sqlite_store.py    SQLite storage adapter
-app/postgres_store.py  PostgreSQL storage adapter
+app/postgres_store.py  PostgreSQL storage adapter (pooling, no boot-time DDL)
+app/errors.py      StoreUnavailable / SchemaNotMigrated (mapped to 503 / fail-fast)
+app/migrate.py     Versioned migrations + feed_app role bootstrap (one-shot job)
+migrations/        Versioned PostgreSQL schema (applied by app/migrate.py)
 app/events.py      SSE pub/sub broker (capped subscriber count)
 app/ratelimit.py   In-process fixed-window request rate limiting
 app/alerts.py      Discord / Slack / email / log alerts for urgent items
@@ -73,19 +83,21 @@ frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step)
                    Dockerfile + nginx.conf + security-headers.conf serve it as
                    non-root nginx on 8080
 tests/             Unit tests: feed/enrichment, models, store, search, config, HTTP
-                   policy, API, pipeline, OSV/OSSF, alerts, rate limiting
+                   policy, API, pipeline, OSV/OSSF, alerts, rate limiting,
+                   migrations (TEST_DATABASE_URL)
 docs/              Architecture review (docs/architecture.md) + ADRs (docs/adr/)
                    and the Supabase migration analysis
                    (docs/supabase-migration-plan.md)
 deploy/k8s/        Kubernetes manifests (api, frontend, NetworkPolicy;
                    postgres/PDB/Ingress/OpenSearch ship commented out of
-                   kustomization.yaml; secret.example.yaml is a template and is
-                   NOT applied by kustomize)
-.github/workflows/ CI (uv lock check, frozen pytest, pip-audit on Python 3.13),
+                   kustomization.yaml; migrate-job.yaml is optional;
+                   secret.example.yaml is a template and is NOT applied by kustomize)
+.github/workflows/ CI (uv lock check, migrations, frozen pytest, pip-audit on Python 3.13),
                    CodeQL, container image builds
 docker-compose.yml           Base services (local build; UI host port 8080; reads .env)
+docker-compose.supabase.yml  Overlay: hosted Supabase, skips local postgres
 docker-compose.prod.yml      Production overrides (digest-pinned GHCR images)
-.env.example                 Template for the gitignored .env (Postgres credentials)
+.env.example                 Template for the gitignored .env (local and Supabase credentials)
 pyproject.toml               Direct dependencies + dev group + uv settings
 uv.lock                      Committed, hash-locked dependency graph
 ```
@@ -172,6 +184,25 @@ uv.lock                      Committed, hash-locked dependency graph
     `uv lock --check`. Refresh with `uv lock --upgrade`, run the tests and
     runtime audit, and commit both files. Do not add `requirements*.txt` or
     install packages ad hoc.
+20. **Schema changes go through `migrations/`.** The API never creates or alters
+    schema at startup: `postgres_store.init_db()` only verifies the latest
+    version and fails fast with the migration command. Add a new numbered
+    `migrations/NNNN_*.sql` file; never edit an applied migration. Apply with
+    `python -m app.migrate upgrade` (compose runs it as a one-shot job; the
+    Kubernetes Job is optional). The migration runner connects with the
+    privileged `ADMIN_DATABASE_URL`; the API never receives that DSN.
+21. **The runtime database role is DML-only.** `DATABASE_URL` uses
+    `feed_app.PROJECT-REF` (session-mode pooler) with
+    `SELECT/INSERT/UPDATE/DELETE` on the three tables only. It must not be able
+    to create roles/tables, `TRUNCATE`, or read `auth`/`storage`/`realtime`.
+    The `postgres` role is for migrations and one-time bootstrap only. Keep
+    `anon`/`authenticated` revoked on the app tables and keep the default
+    privileges revoked in `public`.
+22. **Health and readiness are separate.** `/health` is liveness only and must
+    never touch the database (it used to run the full `stats()` aggregate on
+    every probe). `/ready` is the database readiness check (`SELECT 1` with a
+    short timeout, `503` when unavailable). `/api/stats` is cached; do not
+    reintroduce an unbounded aggregate into a probe path.
 
 ## Feed item contract
 
@@ -235,12 +266,27 @@ emits `is_sample`.
   topic filter in `_is_relevant()` when touching that source.
 - **Lockfiles are generated.** Never hand-edit `uv.lock`; edit
   `pyproject.toml`, re-lock, and commit both files.
+- **`SET` inside a transaction is rolled back.** The pool `configure` callback
+  commits its session timeouts; the migration runner commits between files.
+  Do not wrap a `SET` in an implicit transaction and expect it to survive.
+- **Supavisor ignores DSN `options`** and reports its own `application_name`.
+  Session guards (`statement_timeout`, idle-transaction timeout, lock timeout)
+  must be applied with an explicit committed `SET`, not connection-string
+  options.
+- **`executemany()` prepares on the first execution** with psycopg, so keep
+  `DB_PREPARE_THRESHOLD` unset for transaction mode and `5` only for
+  direct/session mode.
+- **Never point `TEST_DATABASE_URL` at a hosted database.** The Postgres tests
+  truncate tables; they refuse remote hosts unless
+  `ALLOW_REMOTE_TEST_DB=1` is set explicitly.
 
 ## Definition of done
 
 - [ ] `uv lock --check`, `uv sync --frozen`, and `uv run --frozen pytest -q` are green
 - [ ] Runtime audit is clean (CI runs `pip-audit`)
-- [ ] Server starts and `/health` returns `{"status":"ok"}`
+- [ ] `python -m app.migrate check` reports the schema current
+- [ ] Server starts and `/health` returns `{"status":"ok"}` without a DB query
+- [ ] `/ready` returns 200 with the database and 503 without it
 - [ ] `/api/feed` returns valid items (or sample fallback) without waiting on a refresh
 - [ ] Docker image builds from the frozen lock
 - [ ] Frontend edits: `node --check frontend/app.js`, no new dependency, no `alert()` placeholders

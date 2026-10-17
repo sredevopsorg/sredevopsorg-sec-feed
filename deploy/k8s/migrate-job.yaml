@@ -1,0 +1,61 @@
+# Optional one-shot schema migration Job (not applied by kustomization.yaml).
+#
+# Apply it before rolling out a new API image that relies on pending
+# migrations, then wait for completion:
+#
+#   kubectl -n security-feed apply -f deploy/k8s/migrate-job.yaml
+#   kubectl -n security-feed wait --for=condition=complete job/security-feed-migrate --timeout=5m
+#
+# The Secret must contain ADMIN_DATABASE_URL (the privileged role). The API
+# only receives DATABASE_URL (the DML-only feed_app role). This manifest is
+# off the default path because the shipped Kubernetes default uses SQLite.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: security-feed-migrate
+  namespace: security-feed
+  labels:
+    app: security-feed-api
+    component: migrate
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: security-feed-api
+        component: migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:7b3848cb812df0d55b9161d83caabe3775a545244acecf9fb205790360bd2169
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "app.migrate", "upgrade"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          envFrom:
+            - configMapRef:
+                name: security-feed-api-config
+            - secretRef:
+                name: security-feed-api-secrets
+          env:
+            # Set to "prefer" only for a local/self-hosted Postgres without TLS.
+            - name: DB_SSLMODE
+              value: "require"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

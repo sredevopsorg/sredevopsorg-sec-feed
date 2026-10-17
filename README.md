@@ -53,7 +53,7 @@ Dependencies are declared in `pyproject.toml` and hash-locked in the committed
 | Alerting | Discord webhook (primary) / Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
-All roadmap items are complete for this release candidate (0.2.0-rc.1).
+All roadmap items are complete for v1.1.1.
 
 The frontend and backend are separate deployables: the backend is a pure JSON
 API (`/api/*`, `/health`) and the frontend is a static app served by nginx that
@@ -151,6 +151,7 @@ is hosted on a different origin from the API.
 │   ├── test_alerts.py    # Alert formatting
 │   ├── test_store.py     # SQLite persistence
 │   ├── test_postgres_store.py # PostgreSQL adapter (needs TEST_DATABASE_URL)
+│   ├── test_migrate.py   # Versioned migrations + feed_app grants
 │   ├── test_search.py    # Search document mapping
 │   ├── test_config.py    # Settings
 │   ├── test_models.py    # Domain model + storage selection
@@ -159,16 +160,18 @@ is hosted on a different origin from the API.
 │   ├── test_events.py    # SSE broker subscriber cap
 │   ├── test_ratelimit.py # Rate limiter
 │   └── test_pipeline.py  # Refresh pipeline
+├── migrations/           # Versioned PostgreSQL schema (applied by app.migrate)
 ├── docs/
 │   ├── architecture.md   # Architecture review (C4) + delivery record
 │   ├── adr/              # Architecture Decision Records
-│   └── supabase-migration-plan.md # Hosted-Postgres analysis (partially implemented)
+│   └── supabase-migration-plan.md # Hosted-Postgres analysis
 ├── deploy/
 │   └── k8s/              # Kubernetes manifests (api, frontend, NetworkPolicy,
 │                         #   postgres/PDB/Ingress/OpenSearch optional;
-│                         #   secret.example.yaml is a template, not applied)
+│                         #   migrate-job.yaml optional; secret.example.yaml is a template)
 ├── Dockerfile            # API image (non-root, production)
 ├── docker-compose.yml    # Base services (local build; reads .env)
+├── docker-compose.supabase.yml # Overlay: hosted Supabase, skips local postgres
 ├── docker-compose.prod.yml # Production overrides (digest-pinned images)
 ├── .env.example          # Template for the gitignored .env
 ├── pyproject.toml        # Project metadata + direct dependencies
@@ -191,12 +194,20 @@ cp .env.example .env   # then edit POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_
 docker compose up --build
 ```
 
-This builds the `web` (nginx) and `api` (FastAPI) images from source and starts
-them alongside PostgreSQL:
+This builds the `web` (nginx) and `api` (FastAPI) images from source, runs the
+one-shot `migrate` job to create/upgrade the schema, and then starts the API
+alongside PostgreSQL:
 
 - UI — <http://localhost:8080>
 - API — <http://localhost:8000> (also reachable on the UI origin at `/api`,
   which nginx reverse-proxies to the API container)
+
+The API container never creates schema at startup: it verifies that the latest
+`migrations/*.sql` version is applied. Compose runs `migrate` first (idempotent)
+and waits for it to complete.
+
+To run against hosted Supabase instead of the local database, see
+[Hosted Supabase](#hosted-supabase).
 
 The images are the same ones used in production, so there is no source mount and
 no hot reload: re-run `docker compose up --build` after changing code.
@@ -316,11 +327,12 @@ Without any channel configured, urgent items are logged only.
 
 ### PostgreSQL + OpenSearch via Compose
 
-`docker compose up --build` starts the frontend (`web`), the API (`api`), and
-PostgreSQL, and the API connects to PostgreSQL using the credentials from
-`.env`. To run without PostgreSQL instead, comment out `DATABASE_URL` in the
-`api` service; the app then falls back to SQLite (`./data/feed.db` locally, or
-the `feed-data` volume in containers).
+`docker compose up --build` starts the frontend (`web`), the one-shot `migrate`
+job, the API (`api`), and PostgreSQL. The job applies `migrations/*.sql` using
+the admin role; the API then starts and verifies the schema version (it never
+creates DDL itself). To run without PostgreSQL, use the SQLite fallback by
+removing `DATABASE_URL` from the `api` service (or run the API on the host with
+`DATABASE_URL` unset).
 
 To add OpenSearch search, run:
 
@@ -339,41 +351,92 @@ unavailable OpenSearch never breaks the feed. Sample/fallback rows are never
 indexed, and any sample document left over from an earlier offline boot is
 purged once live rows exist, so search matches the SQL behaviour exactly.
 
-### PostgreSQL / Supabase configuration
+### Hosted Supabase
 
-Setting `DATABASE_URL` switches the store from SQLite to PostgreSQL (self-hosted
-or hosted Supabase). On startup the app creates the schema idempotently —
-tables, indexes, the `pg_trgm` extension, and row-level security — and connects
-through an application-side connection pool.
+Supabase is the supported production database. The API connects through the
+**shared pooler in session mode** (`aws-N-REGION.pooler.supabase.com:5432`),
+which is IPv4 on every plan and supports prepared statements and session state.
+
+There are two database roles:
+
+| Role | DSN variable | Used by | Privileges |
+|---|---|---|---|
+| `feed_app.PROJECT-REF` | `DATABASE_URL` | API container | `SELECT/INSERT/UPDATE/DELETE` on the three app tables; no DDL, no other schemas |
+| `postgres.PROJECT-REF` | `ADMIN_DATABASE_URL` | `migrate` job / one-shot commands only | schema ownership, role creation, migrations |
+
+Put both in `.env` (gitignored; keep it mode `600`):
+
+```bash
+DATABASE_URL="postgresql://feed_app.PROJECT-REF:APP_PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres"
+ADMIN_DATABASE_URL="postgresql://postgres.PROJECT-REF:ADMIN_PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres"
+DB_SSLMODE=require
+DB_PREPARE_THRESHOLD=5        # session mode only
+DB_POOL_MAX_SIZE=4
+```
+
+One-time setup for a new project (after `migrations/0001_baseline.sql` exists):
+
+```bash
+# 1. Apply schema, grants, RLS and the NOLOGIN feed_app role.
+ADMIN_DATABASE_URL=... uv run python -m app.migrate upgrade
+
+# 2. Give feed_app a password (generated, URL-safe; never commit it).
+FEED_APP_PASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+  ADMIN_DATABASE_URL=... uv run python -m app.migrate bootstrap-role
+
+# 3. Verify the DSN and start the stack.
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml up --build
+```
+
+`migrate` is a one-shot service: it applies pending migrations, retries while
+the database starts, and the API waits for it to complete. Re-running it is a
+no-op. After `bootstrap-role` sets a new `feed_app` password, Supavisor may
+briefly cache the previous credential; retry the first login after a few
+seconds. Check the schema without changing anything:
+
+```bash
+ADMIN_DATABASE_URL=... uv run python -m app.migrate check
+```
+
+The overlay puts the local `postgres` services behind the `local-db` profile,
+so `docker compose -f docker-compose.yml -f docker-compose.supabase.yml up`
+does not start a local database.
+
+Connection settings:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | unset (→ SQLite) | `postgresql://…` connection string |
-| `DB_POOL_MIN_SIZE` | `1` | pool min size |
-| `DB_POOL_MAX_SIZE` | `4` | pool max size (Supabase Nano/Micro allows 60 DB connections) |
-| `DB_PREPARE_THRESHOLD` | unset (prepared statements off) | set `5` only on direct/session mode |
-| `DB_CONNECT_TIMEOUT` | `10` | libpq connect timeout, seconds |
-| `DB_SSLMODE` | `prefer` | set `require` for Supabase |
-| `DB_APPLICATION_NAME` | `security-feed` | `application_name` in `pg_stat_activity` |
+| `DATABASE_URL` | unset (→ SQLite) | runtime DSN (DML-only role) |
+| `ADMIN_DATABASE_URL` | unset | privileged DSN, migrations only |
+| `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` | `1` / `4` | application pool bounds (budget: `max × workers × replicas` must stay below the Supabase connection limit) |
+| `DB_POOL_TIMEOUT` | `30` | seconds to wait for a pooled connection |
+| `DB_POOL_MAX_IDLE` / `DB_POOL_MAX_LIFETIME` | `600` / `3600` | recycle idle/stale connections (seconds) |
+| `DB_PREPARE_THRESHOLD` | unset (off) | set `5` only on direct/session mode |
+| `DB_CONNECT_TIMEOUT` | `10` | libpq connect timeout (seconds) |
+| `DB_STATEMENT_TIMEOUT_MS` | `15000` | per-session query timeout |
+| `DB_IDLE_TX_TIMEOUT_MS` | `30000` | release leaked idle transactions |
+| `DB_LOCK_TIMEOUT_MS` | `5000` | bound lock waits |
+| `DB_SSLMODE` | `prefer` | `require` for Supabase; a remote host with `prefer` is rejected at startup |
+| `DB_SSLROOTCERT` | unset | CA file for `verify-full` (optional but recommended) |
+| `DB_APPLICATION_NAME` | `security-feed` | direct/self-hosted only; Supavisor reports its own name |
 
-**Supabase.** Use the *session-mode* pooler (`:5432`) or a direct connection —
-both support prepared statements and session state. Transaction mode (`:6543`)
-also works because prepared statements are disabled by default. Copy the exact
-host from the dashboard **Connect** dialog: the direct host is
-`db.PROJECT-REF.supabase.co`, the pooler host is
-`aws-INDEX-REGION.pooler.supabase.com`, and the pooler username is
-`postgres.PROJECT-REF`.
+**TLS.** `require` encrypts but does not verify the server. For `verify-full`,
+download the project CA from the Supabase dashboard (**Database settings → SSL
+configuration**), mount it into the API and migrate containers, and set
+`DB_SSLMODE=verify-full` plus `DB_SSLROOTCERT=/path/to/prod-supabase.cer`.
 
-```bash
-DATABASE_URL="postgresql://postgres.PROJECT-REF:PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres"
-DB_SSLMODE=require
-```
+**Pooler notes.** Supavisor ignores DSN `options` and overwrites
+`application_name`, so the app applies `statement_timeout`, idle-transaction and
+lock timeouts with an explicit committed `SET` on every pooled connection.
+Transaction mode (`:6543`) does not support prepared statements, session state
+or session-level advisory locks; this project targets session mode (or a direct
+connection). `DB_PREPARE_THRESHOLD` must be a code setting, not a URL parameter
+(libpq rejects it in the connection string).
 
-Notes: `DB_PREPARE_THRESHOLD` must stay a code setting, not a URL parameter
-(libpq rejects it in the connection string). Free-plan projects pause after
-about a week of low database activity; a deployed feed with background refresh
-plus `/health` traffic keeps it active, and a paid plan removes pausing
-altogether.
+Free-plan projects pause after about a week of low activity; the `/ready`
+probe keeps the project active, and a paid plan removes pausing. Daily
+backups/PITR are a plan-level decision — confirm them before relying on the
+hosted database as the only copy.
 
 ### Kubernetes quickstart
 
@@ -418,14 +481,22 @@ Then open <http://localhost:8000>.
   NetworkPolicy; remove `- networkpolicy.yaml` to disable them.
 - `security-feed-api-secrets` — **not applied by kustomize**. This repo ships
   only `secret.example.yaml` (placeholders), so create the real Secret
-  out-of-band before enabling PostgreSQL:
+  out-of-band before enabling PostgreSQL. For hosted Supabase the API needs
+  only the DML-only `DATABASE_URL`; the privileged `ADMIN_DATABASE_URL` is used
+  by `migrate-job.yaml`:
 
   ```bash
   kubectl -n security-feed create secret generic security-feed-api-secrets \
-    --from-literal=POSTGRES_USER=feed \
-    --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 24)" \
-    --from-literal=POSTGRES_DB=feed \
-    --from-literal=DATABASE_URL="postgresql://feed:PASSWORD@postgres:5432/feed"
+    --from-literal=DATABASE_URL="postgresql://feed_app.PROJECT-REF:APP_PASSWORD@HOST:5432/postgres" \
+    --from-literal=ADMIN_DATABASE_URL="postgresql://postgres.PROJECT-REF:ADMIN_PASSWORD@HOST:5432/postgres" \
+    --from-literal=FEED_APP_PASSWORD="APP_PASSWORD"
+  ```
+
+  Then apply the optional migration Job before rolling the API:
+
+  ```bash
+  kubectl -n security-feed apply -f deploy/k8s/migrate-job.yaml
+  kubectl -n security-feed wait --for=condition=complete job/security-feed-migrate --timeout=5m
   ```
 
   For GitOps, manage it with Sealed Secrets, the External Secrets Operator, or
@@ -437,6 +508,7 @@ Then open <http://localhost:8000>.
 | Component | How to enable | Notes |
 |---|---|---|
 | PostgreSQL | Uncomment `- postgres.yaml` in `kustomization.yaml`, uncomment the `DATABASE_URL` env in `deployment.yaml`, and uncomment the `wait-for-postgres` init container next to it | Credentials come from `security-feed-api-secrets` (created out-of-band, above); the PVC is `ReadWriteOnce` |
+| Hosted Supabase | Create the Secret with `DATABASE_URL` (feed_app) and `ADMIN_DATABASE_URL`, set `DB_SSLMODE: "require"` in `configmap.yaml`, apply `deploy/k8s/migrate-job.yaml`, then uncomment the `DATABASE_URL` env in `deployment.yaml` | Keep the local Postgres/PVC disabled; the API verifies the schema but never creates it |
 | PodDisruptionBudgets | Uncomment `- pdb.yaml` | `minAvailable: 1` with `replicas: 1` blocks node drains, so raise the API/web replicas to at least 2 first |
 | Ingress | Uncomment `- ingress.yaml` and set a real host + TLS | Needs an Ingress controller; the sample host is `security-feed.example.com` |
 | OpenSearch | Uncomment `- opensearch.yaml` and `OPENSEARCH_URL` in `configmap.yaml` | Without it, `/api/search` falls back to SQL (Postgres `ILIKE`), so search needs no extra infrastructure. Requires `vm.max_map_count >= 262144` on the node, and runs without auth (ingress is restricted to the API pod by the NetworkPolicy) |
@@ -453,10 +525,11 @@ explicit class (the manifests were previously hardcoded to `longhorn-rwx`).
 | `GET` | `/api/feed` | Normalized feed JSON |
 | `GET` | `/api/items` | Search/filter the persistent archive |
 | `GET` | `/api/search?q=...` | Full-text search (OpenSearch when configured, otherwise SQL — Postgres `ILIKE` or SQLite `LIKE`) |
-| `GET` | `/api/stats` | Counts by severity/tag |
+| `GET` | `/api/stats` | Counts by severity/tag (cached ~30 s; not a live query per request) |
 | `GET` | `/api/events` | Server-Sent Events stream |
 | `GET` | `/api/sources` | Configured sources |
-| `GET` | `/health` | Cache + DB health |
+| `GET` | `/health` | Liveness only: process/cache status, **no database query** |
+| `GET` | `/ready` | Readiness: cheap database ping (`SELECT 1`), `503` when unreachable |
 
 ### `/api/feed`
 

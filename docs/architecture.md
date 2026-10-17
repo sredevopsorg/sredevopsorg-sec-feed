@@ -50,26 +50,33 @@ alert pipeline was a single coroutine, `refresh_feed()`, living in a 778-line
 | 11 | Only the fetcher identified itself to upstreams; `ossf` sent a different agent version, and the other modules sent none. | ✅ Resolved — `app/http_client.py` owns the user agent and timeouts; a test forbids other clients (PR #23). |
 | 12 | The frontend image ran root nginx on port 80 while the invariant and docs claimed non-root on 8080; the README described PostgreSQL and PDBs as part of the default Kubernetes deployment. | ✅ Resolved — unprivileged nginx as UID 101 on 8080, and the manifests/docs now separate default from opt-in components (PR #25 and this PR). |
 | 13 | Dependencies were direct-pinned only; no lockfile meant transitive versions floated between Docker and CI builds, and the local vendored tree had already drifted from the pins. | ✅ Resolved — `pyproject.toml` + hash-locked `uv.lock`, frozen Docker/CI installs, lock check and runtime audit (ADR-0006). |
+| 14 | The PostgreSQL adapter created its schema at API startup (40 executions on the hosted project) as the `postgres` role; `anon`/`authenticated` held `ALL` including `TRUNCATE`; `/health` ran the full `stats()` aggregate on every probe (379k calls). | ✅ Resolved — versioned migrations + DML-only `feed_app` role (ADR-0007); Data API grants revoked; `/health` is DB-free, `/ready` pings, `/api/stats` cached. |
 
 ## 3. Current architecture (implemented, C4 — Container)
 
 ```text
 ┌──────────┐   HTTP(S)   ┌────────────────────┐      ┌──────────────────────────┐
 │ Browser  │ ───────────▶│  web (nginx)       │ ───▶ │  api (FastAPI)  /api/*   │
-└──────────┘             │  serves frontend/  │      │  /health                 │
+└──────────┘             │  serves frontend/  │      │  /health  /ready         │
                          │  static assets     │      └────────┬─────────────────┘
                          └────────────────────┘               │
                                           (configurable API_BASE_URL + CORS)
                                                               ▼
-                                   PostgreSQL / SQLite · OpenSearch (opt) · webhooks
+                                   PostgreSQL (Supabase) / SQLite · OpenSearch (opt) · webhooks
 ```
 
 - **`web`** — a static frontend (plain HTML/CSS/JS, no build step, no CDN
   dependency) served by nginx. It consumes the API over HTTP using a
   configurable base URL and supports same-origin (reverse-proxied) or
   cross-origin (CORS) operation.
-- **`api`** — FastAPI serving only `/api/*` and `/health`. No UI assets.
-- **`postgres` / `opensearch`** — optional backing services.
+- **`api`** — FastAPI serving only `/api/*`, plus `/health` (liveness, no DB) and
+  `/ready` (database readiness). No UI assets.
+- **`migrate`** — a one-shot job that applies `migrations/*.sql` with the
+  privileged DSN before the API starts (ADR-0007). The API verifies the schema
+  version and never creates DDL.
+- **`postgres` (Supabase) / `opensearch`** — backing services. Hosted Supabase
+  is the production database; local Postgres and SQLite remain development and
+  fallback paths.
 
 Component-level (backend), all implemented:
 
@@ -79,6 +86,10 @@ Component-level (backend), all implemented:
   `fetcher ↔ store` cycle (ADR-0004).
 - `app/store.py` — a `Storage` port/facade that selects one backend
   (`sqlite_store.py` or `postgres_store.py`) once (ADR-0003).
+- `app/postgres_store.py` — pooled psycopg adapter with committed per-session
+  timeouts, a DML-only runtime role, and a verify-only `init_db()` (ADR-0007).
+- `app/migrate.py` + `migrations/` — versioned schema and role bootstrapping;
+  applied by a one-shot job, never by the API at startup (ADR-0007).
 - `app/pipeline.py` — the refresh orchestrator with one-way dependencies:
   `fetch → enrich → persist → index → publish → alert` (ADR-0004). `fetcher.py`
   now only fetches and normalizes (`fetch_all()`).
@@ -94,8 +105,9 @@ Component-level (backend), all implemented:
 | [0002](./adr/0002-centralize-configuration.md) | Centralize configuration in a `Settings` object. | Implemented |
 | [0003](./adr/0003-storage-port-and-adapters.md) | Define a single `Storage` port with SQLite + PostgreSQL adapters. | Implemented |
 | [0004](./adr/0004-domain-models-and-refresh-pipeline.md) | Extract a domain `models` module and decompose the refresh pipeline. | Implemented |
-| [0005](./adr/0005-supabase-hosted-postgres.md) | Adopt hosted Supabase Postgres through the session-mode pooler; Phase 1 prerequisites landed, hosted cutover pending. | Partially implemented |
+| [0005](./adr/0005-supabase-hosted-postgres.md) | Adopt hosted Supabase Postgres through the session-mode pooler; hosted cutover, least-privilege role, and migrations landed. | Implemented |
 | [0006](./adr/0006-uv-lock-and-dependency-policy.md) | Use `pyproject.toml` + hash-locked `uv.lock`; frozen installs, lock checks, and runtime audit. | Implemented |
+| [0007](./adr/0007-schema-migrations-and-runtime-role.md) | Versioned SQL migrations via a one-shot Python runner; DML-only `feed_app` runtime role; Data API grants revoked. | Implemented |
 
 ## 5. Delivery record
 
@@ -152,6 +164,11 @@ one PR per finding, each with its own tests and verification notes:
     security bulletins, Amazon Linux 2023 advisories, a CISA KEV source and
     curated GHSA sources; replaced the filtered Kubernetes Blog feed and moved
     NVD queries to bounded publication windows.
+21. **`feat/supabase-migrations-runtime-role`** — hosted Supabase is wired
+    through a Compose overlay, schema creation moved to versioned migrations
+    (ADR-0007), the runtime uses the DML-only `feed_app` role, the Data API
+    grants are revoked, and `/health` no longer queries the database
+    (`/ready` + cached `/api/stats` added).
 
 ## 6. Remaining follow-ups (deferred, not blocking)
 
@@ -163,5 +180,9 @@ one PR per finding, each with its own tests and verification notes:
   ever grows beyond a single process (observation #5).
 - Add a linter/formatter (e.g. ruff) to CI; the repository still documents
   "none configured", so style is enforced by review only.
-- Complete the hosted Supabase cutover, versioned migrations, and backup plan
-  (ADR-0005 / `docs/supabase-migration-plan.md`).
+- Remove persisted sample rows and the `is_sample` hiding rule (Phase 4 in the
+  Supabase plan) once the API-edge fallback exists.
+- Cross-replica single-flight (advisory lock + `ingest_runs`) and optional
+  `pg_cron` scheduling/retention; only worth it with more than one replica.
+- Confirm the Supabase plan's backup/PITR coverage before relying on the hosted
+  database as the only copy.

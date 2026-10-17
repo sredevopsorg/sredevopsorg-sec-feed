@@ -55,6 +55,16 @@ jobs:
       - name: Check installed dependencies
         run: uv pip check
 
+      - name: Apply schema migrations
+        env:
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/feed_test
+        run: uv run --frozen python -m app.migrate upgrade
+
+      - name: Verify schema migrations
+        env:
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/feed_test
+        run: uv run --frozen python -m app.migrate check
+
       - name: Run tests
         run: uv run --frozen pytest -v
 

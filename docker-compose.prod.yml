@@ -20,6 +20,12 @@ services:
     pull_policy: always
     restart: always
 
+  # Same image as the API; runs only the one-shot migration job.
+  migrate:
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest@sha256:7b3848cb812df0d55b9161d83caabe3775a545244acecf9fb205790360bd2169
+    pull_policy: always
+    restart: "no"
+
   postgres:
     image: docker.io/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     restart: always
