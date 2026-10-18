@@ -443,7 +443,7 @@ hosted database as the only copy.
 Requires `kubectl` and access to a cluster (Kustomize is built into `kubectl`).
 
 ```bash
-# Deploy the API, the frontend, the ConfigMap, the NetworkPolicies, and the SQLite PVC
+# Deploy the API, the frontend, the ConfigMap, and the Traefik IngressRoute
 kubectl apply -k deploy/k8s
 
 # Watch the pods become ready (frontend `web` and API `api` pods)
@@ -462,28 +462,28 @@ Then open <http://localhost:8000>.
 **What gets deployed by default** (`deploy/k8s/kustomization.yaml`):
 
 - `security-feed-api` — the backend (Deployment + internal ClusterIP Service
-  `api` on port 8000). It runs as UID 10001 with a read-only root filesystem
-  (`emptyDir` at `/tmp`) and sets `SECURITY_FEED_DB` (`/app/data/feed.db`), so
-  **the default store is SQLite** on the `security-feed-api-data` PVC. The image
-  is pinned by digest.
+  `api` on port 8000). It runs as UID 10001 and persists to **hosted Postgres**
+  through `DATABASE_URL` (the DML-only `feed_app` role), so there is no SQLite
+  volume and no PVC. It does not set `SECURITY_FEED_DB`.
 - `security-feed-web` — the frontend (`nginxinc/nginx-unprivileged` Deployment
   running as UID 101 on port 8080 + ClusterIP Service on port 80). It
   reverse-proxies `/api` to the internal `api` Service, and the pod is
-  `runAsNonRoot` with all capabilities dropped and a read-only root filesystem
-  (`emptyDir` mounts for the nginx cache/pid/tmp), like the API pod.
-- `security-feed-api-config` — ConfigMap for `LOG_LEVEL`, optional
-  `CORS_ORIGINS`, optional rate-limit/SSE tuning, and optional alerting env
-  vars. Put real Discord/Slack/email webhook values in a Secret in production
-  rather than the ConfigMap.
-- `security-feed-*-ingress` — ingress-only NetworkPolicies restricting the API
-  to the frontend pod, PostgreSQL to the API pod, and OpenSearch to the API
-  pod. Egress is untouched. Enforcement needs a CNI that supports
-  NetworkPolicy; remove `- networkpolicy.yaml` to disable them.
+  `runAsNonRoot`.
+- `security-feed-api-config` — ConfigMap for `LOG_LEVEL`, `CORS_ORIGINS`,
+  rate-limit/SSE tuning, and the `DB_*` connection settings (`DB_SSLMODE`,
+  `DB_APPLICATION_NAME`). Put real Discord/Slack/email webhook values in a
+  **Secret**, not here — a webhook URL is a credential.
+- `security-feed-ingressroute` — a Traefik `IngressRoute` (not a
+  `networking.k8s.io` Ingress) that publishes the app on
+  `security-feed.sredevops.org`, routing `/api` straight to the `api` Service on
+  8000 and everything else to `security-feed-web` on 80, with TLS from the
+  `security-feed-sredevops-tls` Secret (provisioned out-of-band; it holds a
+  private key and is not templated here).
 - `security-feed-api-secrets` — **not applied by kustomize**. This repo ships
   only `secret.example.yaml` (placeholders), so create the real Secret
-  out-of-band before enabling PostgreSQL. For hosted Supabase the API needs
-  only the DML-only `DATABASE_URL`; the privileged `ADMIN_DATABASE_URL` is used
-  by `migrate-job.yaml`:
+  out-of-band before deploying. The API needs only the DML-only `DATABASE_URL`;
+  the privileged `ADMIN_DATABASE_URL` is used by `migrate-job.yaml`, never by
+  the API container:
 
   ```bash
   kubectl -n security-feed create secret generic security-feed-api-secrets \
@@ -507,15 +507,16 @@ Then open <http://localhost:8000>.
 
 | Component | How to enable | Notes |
 |---|---|---|
-| PostgreSQL | Uncomment `- postgres.yaml` in `kustomization.yaml`, uncomment the `DATABASE_URL` env in `deployment.yaml`, and uncomment the `wait-for-postgres` init container next to it | Credentials come from `security-feed-api-secrets` (created out-of-band, above); the PVC is `ReadWriteOnce` |
-| Hosted Supabase | Create the Secret with `DATABASE_URL` (feed_app) and `ADMIN_DATABASE_URL`, set `DB_SSLMODE: "require"` in `configmap.yaml`, apply `deploy/k8s/migrate-job.yaml`, then uncomment the `DATABASE_URL` env in `deployment.yaml` | Keep the local Postgres/PVC disabled; the API verifies the schema but never creates it |
+| PostgreSQL (in-cluster) | Uncomment `- postgres.yaml` in `kustomization.yaml` and point `DATABASE_URL` at `postgresql://USER:PASSWORD@postgres:5432/DB` | Only needed if you do **not** want hosted Supabase, which is the default. Credentials come from `security-feed-api-secrets` (created out-of-band, above); the PVC is `ReadWriteOnce` |
+| NetworkPolicies | Uncomment `- networkpolicy.yaml` | Shipped but **not applied** by default. Enforcement needs a CNI that implements NetworkPolicy |
 | PodDisruptionBudgets | Uncomment `- pdb.yaml` | `minAvailable: 1` with `replicas: 1` blocks node drains, so raise the API/web replicas to at least 2 first |
-| Ingress | Uncomment `- ingress.yaml` and set a real host + TLS | Needs an Ingress controller; the sample host is `security-feed.example.com` |
-| OpenSearch | Uncomment `- opensearch.yaml` and `OPENSEARCH_URL` in `configmap.yaml` | Without it, `/api/search` falls back to SQL (Postgres `ILIKE`), so search needs no extra infrastructure. Requires `vm.max_map_count >= 262144` on the node, and runs without auth (ingress is restricted to the API pod by the NetworkPolicy) |
+| Generic Ingress (non-Traefik) | Uncomment `- ingress.yaml`, drop `- ingressroute.yaml`, and set a real host + TLS | Only for clusters without Traefik. The default is the `IngressRoute`; the sample host in `ingress.yaml` is `security-feed.example.com` |
+| OpenSearch | Uncomment `- opensearch.yaml` and `OPENSEARCH_URL` in `configmap.yaml` | Without it, `/api/search` falls back to SQL (Postgres `ILIKE`), so search needs no extra infrastructure. Requires `vm.max_map_count >= 262144` on the node, and runs without auth |
 
-The `security-feed-api-data` PVC uses the cluster's default StorageClass.
-Set `storageClassName` in `deploy/k8s/pvc.yaml` if your cluster requires an
-explicit class (the manifests were previously hardcoded to `longhorn-rwx`).
+The API no longer uses a `security-feed-api-data` PVC: hosted Postgres is the
+store, so `pvc.yaml` was removed with the SQLite path. If you deliberately want
+SQLite on a volume, add a PVC back, mount it at `/app/data`, and set
+`SECURITY_FEED_DB=/app/data/feed.db` on the container.
 
 ## API
 

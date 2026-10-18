@@ -6,9 +6,8 @@ resources:
   - deployment.yaml
   - service.yaml
   - frontend.yaml
-  - pvc.yaml
+  - ingressroute.yaml
   - configmap.yaml
-  - networkpolicy.yaml
   # The credentials Secret is deliberately NOT applied by kustomize: this repo
   # ships no real values and a placeholder Secret would clobber a real one.
   # Create it out-of-band first (see secret.example.yaml):
@@ -16,12 +15,13 @@ resources:
   #     --from-literal=POSTGRES_USER=... --from-literal=POSTGRES_PASSWORD=... \
   #     --from-literal=POSTGRES_DB=... --from-literal=DATABASE_URL=...
   # - secret.yaml
-  # - postgres.yaml
-  # - pdb.yaml
-  # Optional: uncomment to expose the frontend via an Ingress (needs an
-  # Ingress controller and a real host/TLS).
-  # - ingress.yaml
-  # OpenSearch is optional and off by default (not a current priority). To
-  # enable it, uncomment the line below and uncomment OPENSEARCH_URL in
-  # configmap.yaml.
-  # - opensearch.yaml
+  #
+  # Deliberately absent from the default deployment. Each is an opt-in
+  # hardening, storage, or scaling step:
+  # - pvc.yaml            SQLite on a PersistentVolumeClaim (this deployment uses hosted Postgres)
+  # - networkpolicy.yaml  ingress-only NetworkPolicies
+  # - pdb.yaml            PodDisruptionBudgets
+  # - postgres.yaml       in-cluster Postgres
+  # - ingress.yaml        generic (non-Traefik) Ingress; ingressroute.yaml is used instead
+  # - opensearch.yaml     OpenSearch; search falls back to SQL without it
+  # - migrate-job.yaml    applied ad hoc before a release that changes the schema
