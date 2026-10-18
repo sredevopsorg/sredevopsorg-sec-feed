@@ -1,6 +1,9 @@
-# Ingress exposing the frontend. Optional and OFF by default: uncomment
-# `- ingress.yaml` in kustomization.yaml and set a real host + TLS. Requires an
-# Ingress controller in the cluster.
+# Generic (non-Traefik) Ingress exposing the frontend. NOT APPLIED.
+#
+# Clusters running Traefik should use ingressroute.yaml instead, which is the
+# manifest wired into kustomization.yaml. Keep this file only for clusters with
+# an nginx-style IngressClass: add `- ingress.yaml` to kustomization.yaml, set
+# a real host + TLS, and drop ingressroute.yaml so the two do not compete.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

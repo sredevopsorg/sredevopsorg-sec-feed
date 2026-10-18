@@ -1,8 +1,14 @@
-# Ingress-only NetworkPolicies.
+# Ingress-only NetworkPolicies. NOT APPLIED by default.
+#
+# Kept as an optional hardening step rather than part of the deployment.
+# To opt in, add `- networkpolicy.yaml` to kustomization.yaml.
 #
 # They restrict the backend components to the traffic they actually need and
 # leave egress (and every pod not selected below) untouched, so enabling them
 # cannot cut off DNS, outbound source fetching, or the Ingress controller.
+#
+# Note that the API now reaches hosted Postgres over the internet, so the
+# postgres policy below only matters if you re-enable in-cluster Postgres.
 #
 # Caveat: enforcement requires a CNI that implements NetworkPolicy (Calico,
 # Cilium, ...); on a plugin without support these objects are simply ignored.

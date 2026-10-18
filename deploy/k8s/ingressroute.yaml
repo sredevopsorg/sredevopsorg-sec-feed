@@ -1,0 +1,32 @@
+# Traefik IngressRoute exposing the frontend and the API.
+#
+# Requires the Traefik CRDs (traefik.io/v1alpha1). Route order matters: the
+# `/api` rule is listed first so API traffic goes straight to the backend
+# instead of through the web pod's nginx reverse proxy.
+#
+# The TLS certificate lives in the `security-feed-sredevops-tls` Secret, which
+# contains a private key and is therefore NOT templated in this repo. Provision
+# it out-of-band (cert-manager, or a one-time apply):
+#
+#   kubectl -n security-feed create secret tls security-feed-sredevops-tls \
+#     --cert=fullchain.pem --key=privkey.pem
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: security-feed-ingressroute
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`security-feed.sredevops.org`) && PathPrefix(`/api`)
+      services:
+        - name: api
+          port: 8000
+    - kind: Rule
+      match: Host(`security-feed.sredevops.org`)
+      services:
+        - name: security-feed-web
+          port: 80
+  tls:
+    secretName: security-feed-sredevops-tls

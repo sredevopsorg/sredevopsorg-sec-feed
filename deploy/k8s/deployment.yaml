@@ -7,12 +7,12 @@ metadata:
     component: api
 spec:
   replicas: 1
+  minReadySeconds: 5
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
-  minReadySeconds: 5
+      maxUnavailable: 1
+      maxSurge: 2
   selector:
     matchLabels:
       app: security-feed-api
@@ -31,67 +31,32 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
-      # initContainers:
-      #   # Wait for PostgreSQL and ensure the application database exists.
-      #   # The postgres image only creates POSTGRES_DB on first init, so check
-      #   # the always-present `postgres` maintenance DB and create the app DB
-      #   # if it is missing (e.g. a reused/stale volume). POSTGRES_USER /
-      #   # POSTGRES_DB come from the Secret; Kubernetes expands `$(VAR)` in the
-      #   # command below.
-      #   - name: wait-for-postgres
-      #     image: docker.io/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
-      #     envFrom:
-      #       - secretRef:
-      #           name: security-feed-api-secrets
-      #     command:
-      #       - sh
-      #       - -c
-      #       - |
-      #         until pg_isready -h postgres -p 5432 -U "$(POSTGRES_USER)" -d postgres; do
-      #           echo "waiting for postgres..."
-      #           sleep 2
-      #         done
-      #         psql -h postgres -p 5432 -U "$(POSTGRES_USER)" -d postgres -tAc \
-      #           "SELECT 1 FROM pg_database WHERE datname = '$(POSTGRES_DB)'" | grep -q 1 || \
-      #         psql -h postgres -p 5432 -U "$(POSTGRES_USER)" -d postgres -c "CREATE DATABASE $(POSTGRES_DB)"
       containers:
         - name: api
-          # Digest-pinned for reproducibility. To move to a newer release,
-          # resolve the digest of the tag you want and replace the sha256:
-          #   docker buildx imagetools inspect ghcr.io/sredevopsorg/sredevopsorg-sec-feed:latest
-          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:api@sha256:7b3848cb812df0d55b9161d83caabe3775a545244acecf9fb205790360bd2169
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:api
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
               name: http
           securityContext:
             allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-            # The root filesystem is immutable; the app writes only to the
-            # /app/data PVC and to /tmp (emptyDir mounted below).
-            readOnlyRootFilesystem: true
           envFrom:
             - configMapRef:
                 name: security-feed-api-config
           env:
-            - name: SECURITY_FEED_DB
-              value: /app/data/feed.db
-            # - name: DATABASE_URL
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: security-feed-api-secrets
-            #       key: DATABASE_URL
-          # Readiness checks the database (/ready, cheap SELECT 1).
+            # Unprivileged DML-only DSN. ADMIN_DATABASE_URL is used only by
+            # migrate-job.yaml and is never exposed to the API container.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: security-feed-api-secrets
+                  key: DATABASE_URL
           readinessProbe:
             httpGet:
-              path: /ready
+              path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
-          # Liveness must not fail during a database outage: /health does not
-          # touch the database.
           livenessProbe:
             httpGet:
               path: /health
@@ -103,16 +68,5 @@ spec:
               cpu: 50m
               memory: 96Mi
             limits:
-              cpu: 1000m
+              cpu: "1"
               memory: 1Gi
-          volumeMounts:
-            - name: feed-data
-              mountPath: /app/data
-            - name: tmp
-              mountPath: /tmp
-      volumes:
-        - name: feed-data
-          persistentVolumeClaim:
-            claimName: security-feed-api-data
-        - name: tmp
-          emptyDir: {}

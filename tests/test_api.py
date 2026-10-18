@@ -88,7 +88,7 @@ def test_events_returns_503_when_subscriber_cap_reached(monkeypatch):
 def test_api_index_describes_endpoints():
     assert asyncio.run(api_index()) == {
         "name": "Security Intelligence Live Feed API",
-        "version": "1.1.1",
+        "version": "1.1.2",
         "endpoints": [
             "/health",
             "/ready",

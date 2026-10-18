@@ -88,10 +88,12 @@ tests/             Unit tests: feed/enrichment, models, store, search, config, H
 docs/              Architecture review (docs/architecture.md) + ADRs (docs/adr/)
                    and the Supabase migration analysis
                    (docs/supabase-migration-plan.md)
-deploy/k8s/        Kubernetes manifests (api, frontend, NetworkPolicy;
-                   postgres/PDB/Ingress/OpenSearch ship commented out of
-                   kustomization.yaml; migrate-job.yaml is optional;
-                   secret.example.yaml is a template and is NOT applied by kustomize)
+deploy/k8s/        Kubernetes manifests: api + frontend Deployments/Services,
+                   ConfigMap, and a Traefik IngressRoute (ingressroute.yaml).
+                   NetworkPolicy/PDB/Postgres/generic Ingress/OpenSearch ship
+                   commented out of kustomization.yaml; migrate-job.yaml is
+                   optional; secret.example.yaml is a template and is NOT
+                   applied by kustomize
 .github/workflows/ CI (uv lock check, migrations, frozen pytest, pip-audit on Python 3.13),
                    CodeQL, container image builds
 docker-compose.yml           Base services (local build; UI host port 8080; reads .env)
