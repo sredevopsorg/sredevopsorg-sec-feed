@@ -121,37 +121,68 @@ def _build_item(path: str, data: dict[str, Any]) -> FeedItem | None:
     )
 
 
+GITHUB_PER_PAGE_MAX = 10
+MAX_PAGES = 10
+
+
+async def _collect_new_commits(
+    client: httpx.AsyncClient, cursor: str | None, per_page: int
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Return (new_commits, advance_to) for the commits after *cursor*.
+
+    Walks up to MAX_PAGES pages so a busy day cannot hide the cursor. If the
+    cursor is still missing at the page limit, advance_to is None: advancing
+    would permanently skip the unseen interval, so the next refresh resumes
+    from the same cursor instead.
+    """
+    collected: list[dict[str, Any]] = []
+    for page in range(1, MAX_PAGES + 1):
+        resp = await client.get(
+            f"{GITHUB_API}/commits",
+            params={"path": "osv/malicious", "per_page": per_page, "page": page},
+        )
+        resp.raise_for_status()
+        commits = resp.json()
+        if not isinstance(commits, list) or not commits:
+            break
+        if cursor is None:
+            # First run: only the newest commit, never a historical backfill.
+            return commits[:1], commits[0]["sha"]
+        for commit in commits:
+            if commit["sha"] == cursor:
+                return collected, (collected[0]["sha"] if collected else None)
+            collected.append(commit)
+        if len(commits) < per_page:
+            # Reached the beginning of history without meeting the cursor; it
+            # is stale (or the file path changed). Process what we have.
+            logger.warning(
+                "OSSF cursor %s is not in the last %d commits; advancing to the newest",
+                cursor,
+                len(collected),
+            )
+            return collected, (collected[0]["sha"] if collected else None)
+    if collected:
+        logger.warning(
+            "OSSF cursor %s not found after %d pages (%d commits); not advancing",
+            cursor,
+            MAX_PAGES,
+            len(collected),
+        )
+    return collected, None
+
+
 async def fetch_recent_reports(limit_commits: int = 5) -> tuple[list[FeedItem], str | None]:
     """Fetch recently added/renamed malicious-package reports.
 
-    Returns (items, latest_commit_sha). On first run the cursor is empty and
-    only the latest commit is processed to avoid backfilling 236k reports.
+    Returns (items, advanced_cursor). On first run the cursor is empty and only
+    the latest commit is processed to avoid backfilling 236k reports.
     """
+    per_page = min(max(limit_commits, 1), GITHUB_PER_PAGE_MAX)
     cursor = await _cursor()
-    async with _client() as client:
-        commits_resp = await client.get(
-            f"{GITHUB_API}/commits",
-            params={"path": "osv/malicious", "per_page": min(max(limit_commits, 1), 10)},
-        )
-        commits_resp.raise_for_status()
-        commits = commits_resp.json()
-
-    if not commits:
-        return [], None
-
-    latest_sha = commits[0]["sha"]
-    if cursor is None:
-        # First run: start from the newest commit only.
-        new_commits = commits[:1]
-    else:
-        new_commits = []
-        for commit in commits:
-            if commit["sha"] == cursor:
-                break
-            new_commits.append(commit)
 
     items: list[FeedItem] = []
     async with _client() as client:
+        new_commits, advance_to = await _collect_new_commits(client, cursor, per_page)
         for commit in new_commits:
             sha = commit["sha"]
             try:
@@ -182,10 +213,10 @@ async def fetch_recent_reports(limit_commits: int = 5) -> tuple[list[FeedItem], 
                 if item:
                     items.append(item)
 
-    # Persist cursor before returning so progress is not lost on restart.
-    if latest_sha:
-        await _set_cursor(latest_sha)
-    return items, latest_sha
+    # Persist the cursor only when it is safe to move it.
+    if advance_to:
+        await _set_cursor(advance_to)
+    return items, advance_to
 
 
 async def _cursor() -> str | None:
