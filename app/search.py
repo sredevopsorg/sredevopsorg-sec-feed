@@ -97,7 +97,9 @@ def _hit_to_item(source: dict[str, Any]) -> dict[str, Any]:
     item = dict(source)
     item.setdefault("tags", [])
     item.setdefault("cves", [])
-    item["time_ago"] = ""
+    # Match the SQL contract: an item without a publication date reports null,
+    # never an empty string and never "now".
+    item["time_ago"] = None
     published_raw = item.get("published")
     if isinstance(published_raw, str):
         try:

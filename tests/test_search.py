@@ -56,6 +56,12 @@ def test_hit_to_item_adds_time_ago():
     assert item["time_ago"]  # non-empty for a past date
 
 
+def test_hit_to_item_leaves_an_unknown_publication_time_null():
+    item = _hit_to_item({"id": "a", "title": "t", "severity": "high"})
+    assert item["time_ago"] is None
+    assert "published" not in item
+
+
 def test_needs_sample_purge_only_when_live_rows_exist():
     """Sample documents must not survive once the archive has live rows."""
     assert _needs_sample_purge([]) is False

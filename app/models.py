@@ -75,10 +75,10 @@ def _time_ago(seconds: int) -> str:
 def item_to_dict(item: FeedItem, now: datetime | None = None) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     tags = sorted(item.tags, key=lambda t: (_tag_priority(t), t))
-    published = item.published or now
-    published = _ensure_aware(published)
-    delta = now - published
-    seconds = max(0, int(delta.total_seconds()))
+    # An unknown publication time stays unknown. Substituting 'now' made every
+    # dateless item render as "just now" on every request (and sort to the top).
+    published = _ensure_aware(item.published) if item.published is not None else None
+    seconds = max(0, int((now - published).total_seconds())) if published is not None else None
     return {
         "id": item.id,
         "title": item.title,
@@ -86,8 +86,8 @@ def item_to_dict(item: FeedItem, now: datetime | None = None) -> dict[str, Any]:
         "url": item.url,
         "source": item.source,
         "source_url": item.source_url,
-        "published": published.isoformat(),
-        "time_ago": _time_ago(seconds),
+        "published": published.isoformat() if published is not None else None,
+        "time_ago": _time_ago(seconds) if seconds is not None else None,
         "tags": tags,
         "cves": item.cves,
         "severity": item.severity,

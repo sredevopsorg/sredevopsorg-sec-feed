@@ -78,6 +78,34 @@ def _extract_cvss_score(text: str) -> float | None:
     return max(scores) if scores else None
 
 
+# Short tokens that occur inside unrelated words ("source" contains "rce",
+# "process" contains "poc", "truncate" contains "runc", "misused" contains
+# "suse"). Those must match as whole words; longer phrases keep the cheaper
+# substring test.
+_AMBIGUOUS_TOKENS = frozenset({"rce", "poc", "apt", "kev", "aws", "runc", "suse", "gke"})
+_MENTION_PATTERNS: dict[str, re.Pattern[str]] = {}
+
+
+def _mentions(text: str, token: str) -> bool:
+    """True when *token* appears in *text* as a whole word."""
+    pattern = _MENTION_PATTERNS.get(token)
+    if pattern is None:
+        pattern = re.compile(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])")
+        _MENTION_PATTERNS[token] = pattern
+    return pattern.search(text) is not None
+
+
+def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
+    """Match phrases as substrings, ambiguous short tokens as whole words."""
+    for token in tokens:
+        if token in _AMBIGUOUS_TOKENS:
+            if _mentions(text, token):
+                return True
+        elif token in text:
+            return True
+    return False
+
+
 def _is_relevant(source: Source, text: str) -> bool:
     """Return True when an item is on-topic for this feed.
 
@@ -156,15 +184,15 @@ def _infer_severity(text: str, cvss_score: float | None = None) -> str:
             return "low"
         return "unknown"
     t = text.lower()
-    if any(w in t for w in ("critical severity", "critical vulnerability", "critical security", "critical flaw", "critical remote", "rated critical", "(critical)", "cvss 9.", "cvss:4.0/av:n/ac:l")):
+    if _contains_any(t, ("critical severity", "critical vulnerability", "critical security", "critical flaw", "critical remote", "rated critical", "(critical)", "cvss 9.", "cvss:4.0/av:n/ac:l")):
         return "critical"
     # "important" is the Red Hat / Amazon Linux rating between critical and
     # moderate, so it maps to high.
-    if any(w in t for w in ("high severity", "high-severity", "important severity", "(important)", "privilege escalation", "remote code execution", "rce")):
+    if _contains_any(t, ("high severity", "high-severity", "important severity", "(important)", "privilege escalation", "remote code execution", "rce")):
         return "high"
-    if any(w in t for w in ("medium severity", "medium-severity", "(moderate)")):
+    if _contains_any(t, ("medium severity", "medium-severity", "(moderate)")):
         return "medium"
-    if any(w in t for w in ("low severity", "low-severity", "(low)")):
+    if _contains_any(t, ("low severity", "low-severity", "(low)")):
         return "low"
     return "unknown"
 
@@ -172,19 +200,19 @@ def _infer_severity(text: str, cvss_score: float | None = None) -> str:
 def _infer_tags(text: str, source_tags: frozenset[str], cves: list[str]) -> set[str]:
     t = text.lower()
     tags = set(source_tags)
-    if any(w in t for w in ("linux", "ubuntu", "debian", "red hat", "fedora", "suse", "kernel", "glibc", "systemd", "openssl")):
+    if _contains_any(t, ("linux", "ubuntu", "debian", "red hat", "fedora", "suse", "kernel", "glibc", "systemd", "openssl")):
         tags.add("linux")
-    if any(w in t for w in ("aws", "amazon", "azure", "gcp", "google cloud", "cloud", "mwaa", "gke")):
+    if _contains_any(t, ("aws", "amazon", "azure", "gcp", "google cloud", "cloud", "mwaa", "gke")):
         tags.add("cloud")
-    if any(w in t for w in ("kubernetes", "k8s", "kube", "containerd", "cri-o", "helm", "istio", "envoy", "runc", "ingress")):
+    if _contains_any(t, ("kubernetes", "k8s", "kube", "containerd", "cri-o", "helm", "istio", "envoy", "runc", "ingress")):
         tags.add("kubernetes")
     if cves:
         tags.add("cve")
-    if any(w in t for w in ("exploit", "exploited", "kev", "in the wild", "weaponized", "poc", "ransomware")):
+    if _contains_any(t, ("exploit", "exploited", "kev", "in the wild", "weaponized", "poc", "ransomware")):
         tags.add("exploit")
-    if any(w in t for w in ("patch", "update", "fixed", "security update", "advisory", "bulletin")):
+    if _contains_any(t, ("patch", "update", "fixed", "security update", "advisory", "bulletin")):
         tags.add("patch")
-    if any(w in t for w in ("cisa", "alert", "threat", "apt", "nation-state")):
+    if _contains_any(t, ("cisa", "alert", "threat", "apt", "nation-state")):
         tags.add("threat")
     return tags
 

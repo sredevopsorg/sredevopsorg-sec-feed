@@ -46,6 +46,11 @@
   }
 
   function renderRow(item) {
+    // Never imply a publication time we do not have.
+    const timeAgo = item.time_ago
+      ? escapeHtml(item.time_ago)
+      : '<span title="Publication date unknown">—</span>';
+
     const urgentDot = item.urgent
       ? `<span class="row-dot" title="Urgent / high priority"></span>`
       : `<span class="row-dot read" title="Read"></span>`;
@@ -69,7 +74,7 @@
 
     return `
       <article class="feed-row">
-        <div class="row-time">${escapeHtml(item.time_ago)}</div>
+        <div class="row-time">${timeAgo}</div>
         <div class="row-main">
           ${title}
           ${item.summary ? `<p class="row-summary">${escapeHtml(item.summary)}</p>` : ""}

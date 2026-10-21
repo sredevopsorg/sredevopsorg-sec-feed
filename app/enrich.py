@@ -13,7 +13,15 @@ from datetime import datetime, timedelta, timezone
 
 from . import http_client
 from .config import settings
-from .fetcher import FeedItem, _hash_item, _infer_tags, _strip_html, _truncate
+from .fetcher import (
+    FeedItem,
+    _extract_cvss_score,
+    _hash_item,
+    _infer_severity,
+    _infer_tags,
+    _strip_html,
+    _truncate,
+)
 from .sources import Source
 
 logger = logging.getLogger(__name__)
@@ -154,7 +162,14 @@ async def fetch_recent_kev(source: Source) -> list[FeedItem]:
         summary = _truncate(_strip_html(" ".join(p for p in parts if p)))
         url = _kev_reference(entry)
         cves = [cve_id]
-        tags = _infer_tags(f"{title} {summary}", source.tags | {"kev"}, cves)
+        text = f"{title} {summary}"
+        tags = _infer_tags(text, source.tags | {"kev"}, cves)
+        # KEV entries often embed a CVSS score in their notes; use it instead of
+        # reporting the most important items in the feed as "unknown".
+        cvss = _extract_cvss_score(
+            " ".join(str(entry.get(key) or "") for key in ("requiredAction", "notes", "shortDescription"))
+        )
+        severity = _infer_severity(text, cvss)
         items.append(
             FeedItem(
                 id=_hash_item(url, title),
@@ -166,7 +181,7 @@ async def fetch_recent_kev(source: Source) -> list[FeedItem]:
                 published=added,
                 tags=tags,
                 cves=cves,
-                severity="unknown",
+                severity=severity,
                 urgent=True,
                 kev=True,
             )
