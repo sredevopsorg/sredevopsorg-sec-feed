@@ -748,12 +748,7 @@ async def _fetch_source_once(source: Source) -> list[FeedItem] | object:
         # Not due yet: not an error, and not a reason to serve samples.
         return SKIPPED
     try:
-        if source.kind == "ossf-malicious":
-            from . import ossf
-
-            items, _ = await ossf.fetch_recent_reports()
-            items = items[: source.max_items]
-        elif source.kind == "kev":
+        if source.kind == "kev":
             from . import enrich
 
             items = await enrich.fetch_recent_kev(source)

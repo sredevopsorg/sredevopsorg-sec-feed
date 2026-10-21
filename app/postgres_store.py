@@ -118,8 +118,8 @@ def _reset_pool() -> None:
     close()
 
 
-# ``init_db`` verifies the schema produced by ``migrations/0001_baseline.sql``.
-_REQUIRED_TABLES = ("feed_items", "alerted_items", "source_cursors", "source_state")
+# ``init_db`` verifies the schema produced by the checked-in migrations.
+_REQUIRED_TABLES = ("feed_items", "alerted_items", "source_state")
 
 
 
@@ -481,19 +481,4 @@ def mark_alerted(item_ids: list[str], db_path: str = "") -> None:
         cur.executemany(
             "INSERT INTO alerted_items (item_id, created_at) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             [(item_id, now) for item_id in item_ids],
-        )
-
-
-def get_source_cursor(source_id: str, db_path: str = "") -> str | None:
-    with _connection() as conn:
-        row = conn.execute("SELECT cursor FROM source_cursors WHERE source_id = %s", (source_id,)).fetchone()
-    return row["cursor"] if row else None
-
-
-def set_source_cursor(source_id: str, cursor: str, db_path: str = "") -> None:
-    with _connection() as conn:
-        conn.execute(
-            "INSERT INTO source_cursors (source_id, cursor, updated_at) VALUES (%s, %s, %s) "
-            "ON CONFLICT(source_id) DO UPDATE SET cursor = EXCLUDED.cursor, updated_at = EXCLUDED.updated_at",
-            (source_id, cursor, _now_iso()),
         )

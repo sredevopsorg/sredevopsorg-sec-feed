@@ -83,7 +83,7 @@ def pg(monkeypatch):
     migrate.apply_pending(POSTGRES_DSN, wait_seconds=30)
     postgres_store.init_db()
     with postgres_store._connection() as conn:
-        conn.execute("TRUNCATE TABLE feed_items, alerted_items, source_cursors")
+        conn.execute("TRUNCATE TABLE feed_items, alerted_items")
     yield
     postgres_store._reset_pool()
 
@@ -158,12 +158,6 @@ def test_alerted_roundtrip(pg):
     assert urgent
     postgres_store.mark_alerted([u["id"] for u in urgent])
     assert postgres_store.unalerted_urgent_items(limit=10) == []
-
-
-def test_source_cursor_roundtrip(pg):
-    assert postgres_store.get_source_cursor("ossf") is None
-    postgres_store.set_source_cursor("ossf", "cursor-123")
-    assert postgres_store.get_source_cursor("ossf") == "cursor-123"
 
 
 def test_pool_kwargs(pg):

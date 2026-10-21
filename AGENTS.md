@@ -69,7 +69,6 @@ app/pipeline.py    Refresh orchestration: fetch → enrich → persist → prune
 app/enrich.py      CISA KEV + FIRST EPSS enrichment, plus the KEV source (best-effort)
 app/osv.py         OSV.dev enrichment (affected/fixed/severity, best-effort)
 app/search.py      Search backend (OpenSearch if configured, SQL fallback)
-app/ossf.py         OpenSSF Malicious Packages source (GitHub API + cursor)
 app/store.py       Storage facade/port (selects sqlite or postgres backend)
 app/sqlite_store.py    SQLite storage adapter
 app/postgres_store.py  PostgreSQL storage adapter (pooling, no boot-time DDL)
@@ -83,11 +82,12 @@ frontend/          Single-page frontend (HTML + CSS + vanilla JS, no build step)
                    Dockerfile + nginx.conf + security-headers.conf serve it as
                    non-root nginx on 8080
 tests/             Unit tests: feed/enrichment, models, store, search, config, HTTP
-                   policy, API, pipeline, OSV/OSSF, alerts, rate limiting,
+                   policy, API, pipeline, OSV, alerts, rate limiting,
                    migrations (TEST_DATABASE_URL)
 docs/              Architecture review (docs/architecture.md) + ADRs (docs/adr/)
                    and the Supabase migration analysis
-                   (docs/supabase-migration-plan.md)
+                   (docs/supabase-migration-plan.md) plus the caching/search
+                   proposal (docs/supabase-improvements.md)
 deploy/k8s/        Kubernetes manifests: api + frontend Deployments/Services,
                    ConfigMap, and a Traefik IngressRoute (ingressroute.yaml).
                    NetworkPolicy/PDB/Postgres/generic Ingress/OpenSearch ship
@@ -132,7 +132,7 @@ uv.lock                      Committed, hash-locked dependency graph
 2. If it is RSS/Atom, no new fetcher code is needed. If it is a new API shape,
    add a `_fetch_<kind>` function in `app/fetcher.py` and a branch in
    `_fetch_source()`. Current kinds: `rss`, `nvd`, `redhat-api`, `ghsa`,
-   `kev`, `ossf-malicious`. Each GHSA entry costs one GitHub API request per
+   `kev`. Each GHSA entry costs one GitHub API request per
    refresh, so keep that curated list short.
 3. Add relevance filtering if the feed is broader than Linux/cloud/Kubernetes
    (see `_is_relevant()`).
@@ -150,72 +150,70 @@ uv.lock                      Committed, hash-locked dependency graph
    configured.
 9. OSV enrichment is best-effort and capped per refresh. Never fetch OSV for
    every CVE in the archive.
-10. The OSSF malicious-packages source must use the GitHub API cursor flow in
-    `app/ossf.py`. Never clone the full repo in the app; it is over 1 GB.
-11. `store.py` is the only storage API callers should use. When `DATABASE_URL`
+10. `store.py` is the only storage API callers should use. When `DATABASE_URL`
     is set it delegates to `postgres_store.py`; otherwise it uses SQLite.
-12. Keep the SQLite path working. Local tests rely on it.
-13. **Production images run non-root.** The API image uses a non-root `app`
+11. Keep the SQLite path working. Local tests rely on it.
+12. **Production images run non-root.** The API image uses a non-root `app`
     user (UID 10001). The frontend image is `nginxinc/nginx-unprivileged`
     running as UID 101 and listening on 8080; Compose publishes it on host 8080
     and the Kubernetes Service exposes port 80. Do not add `USER root` to
     production images, and keep the nginx listen port in step with the image.
-14. **The search index must match the SQL view.** Sample rows are never
+13. **The search index must match the SQL view.** Sample rows are never
     indexed, and `search.sync_archive()` purges them as soon as live rows
     exist, so `/api/search` cannot return rows the SQL paths hide.
-15. **CORS fails closed.** `CORS_ORIGINS` defaults to empty, so the API denies
+14. **CORS fails closed.** `CORS_ORIGINS` defaults to empty, so the API denies
     every cross-origin caller. Only add an allow-list when the frontend is
     genuinely hosted on another origin, and update the frontend CSP
     `connect-src` to match.
-16. **Public read endpoints stay bounded.** `/api/search` and `/api/events`
+15. **Public read endpoints stay bounded.** `/api/search` and `/api/events`
     carry the `app.ratelimit` dependency (per-process, `RATE_LIMIT_PER_MINUTE`,
     `0` disables), and `Broker.subscribe()` refuses new SSE subscribers past
     `MAX_SSE_SUBSCRIBERS`, returning `503`. Do not add unbounded work to those
     routes.
-17. **Production images are digest-pinned and credentials never live in git.**
+16. **Production images are digest-pinned and credentials never live in git.**
     Deployments/Compose/Dockerfiles reference `tag@sha256:…` (bump deliberately);
     Compose reads Postgres credentials from the gitignored `.env` and fails
     closed without them, and `deploy/k8s/secret.example.yaml` is a placeholder
     template that is intentionally **not** referenced by `kustomization.yaml`.
-18. **Search input is escaped, not interpolated.** `%`/`_` in `/api/search`
+17. **Search input is escaped, not interpolated.** `%`/`_` in `/api/search`
     are escaped before being wrapped in `%...%`; keep both storage adapters in
     step and keep queries parameterized.
-19. **Dependencies are locked and hash-verified.** `pyproject.toml` is the only
+18. **Dependencies are locked and hash-verified.** `pyproject.toml` is the only
     direct-dependency input; `uv.lock` is the committed resolved graph. Docker
     and CI install with `uv sync --frozen`; a stale lock fails
     `uv lock --check`. Refresh with `uv lock --upgrade`, run the tests and
     runtime audit, and commit both files. Do not add `requirements*.txt` or
     install packages ad hoc.
-20. **Schema changes go through `migrations/`.** The API never creates or alters
+19. **Schema changes go through `migrations/`.** The API never creates or alters
     schema at startup: `postgres_store.init_db()` only verifies the latest
     version and fails fast with the migration command. Add a new numbered
     `migrations/NNNN_*.sql` file; never edit an applied migration. Apply with
     `python -m app.migrate upgrade` (compose runs it as a one-shot job; the
     Kubernetes Job is optional). The migration runner connects with the
     privileged `ADMIN_DATABASE_URL`; the API never receives that DSN.
-21. **The runtime database role is DML-only.** `DATABASE_URL` uses
+20. **The runtime database role is DML-only.** `DATABASE_URL` uses
     `feed_app.PROJECT-REF` (session-mode pooler) with
     `SELECT/INSERT/UPDATE/DELETE` on the app tables only. It must not be able
     to create roles/tables, `TRUNCATE`, or read `auth`/`storage`/`realtime`.
     The `postgres` role is for migrations and one-time bootstrap only. Keep
     `anon`/`authenticated` revoked on the app tables and keep the default
     privileges revoked in `public`.
-22. **Health and readiness are separate.** `/health` is liveness only and must
+21. **Health and readiness are separate.** `/health` is liveness only and must
     never touch the database (it used to run the full `stats()` aggregate on
     every probe). `/ready` is the database readiness check (`SELECT 1` with a
     short timeout, `503` when unavailable). `/api/stats` is cached; do not
     reintroduce an unbounded aggregate into a probe path.
-23. **An unknown publication time stays `None`.** `item_to_dict()` must never
+22. **An unknown publication time stays `None`.** `item_to_dict()` must never
     substitute `now` for a missing `published`; the API emits `null` for both
     `published` and `time_ago` and the UI renders an em dash. Substituting `now`
     made dateless items look freshly published on every request.
-24. **The archive is bounded.** `RETENTION_DAYS` (default 180, `0` disables)
+23. **The archive is bounded.** `RETENTION_DAYS` (default 180, `0` disables)
     drives the throttled `prune_items` pipeline step. Never prune sample rows.
-25. **A skipped source is not a failure.** `Source.min_interval_seconds` and
+24. **A skipped source is not a failure.** `Source.min_interval_seconds` and
     conditional GET (`ETag`/`Last-Modified` + `source_state.last_payload`) may
     skip a fetch. A skipped source must not appear in `source_errors` and must
     never trigger the sample fallback (that would overwrite a live archive).
-26. **Fetch state lives in `source_state`.** Conditional requests for RSS and
+25. **Fetch state lives in `source_state`.** Conditional requests for RSS and
     GHSA store validators and a capped last payload; a `304` without a usable
     payload retries unconditionally once. Never let a state read/write failure
     break a refresh.
@@ -229,9 +227,8 @@ Every item must be normalized to the `FeedItem` dataclass in
 - `title`, `summary`, `url`, `source`, `source_url`
 - `published` — timezone-aware UTC datetime or `None`
 - `tags` — core set `linux`, `cloud`, `kubernetes`, `cve`, `exploit`,
-  `patch`, `threat`; KEV enrichment and the KEV source add `kev`; the OpenSSF source adds
-  `malware`, `supply-chain`, `malicious-packages` and the lowercased ecosystem
-  (`go`, `npm`, …); the ZDI sources add `zeroday`
+  `patch`, `threat`; KEV enrichment and the KEV source add `kev`; the ZDI
+  sources add `zeroday`
 - `cves` — list of uppercase CVE IDs, e.g. `["CVE-2024-21626"]`
 - `severity` — `critical` | `high` | `medium` | `low` | `unknown`
 - `urgent` — boolean, drives the red dot in the UI
@@ -268,7 +265,7 @@ are emitted as `null`.
   UTC, which the SQLite adapter needs because it orders rows by the stored ISO
   string.
 - **Sample rows** must stay invisible once live rows exist (invariant 4), in
-  the store *and* in the OpenSearch index (invariant 14).
+  the store *and* in the OpenSearch index (invariant 13).
 - **HTML summaries** must be stripped/truncated with `_strip_html()` and
   `_truncate()` before rendering.
 - **NVD keyword queries** return oldest-first. `_fetch_nvd()` queries a

@@ -271,7 +271,7 @@ and (once available) a Supabase project.
 - `init_db()` shrinks to "verify the expected migration version is applied; fail
   loudly otherwise". Schema creation must not be a runtime side effect of
   starting an API container, especially not one that may run several replicas.
-- Keep SQLite working (invariant 12) by leaving `sqlite_store.py`'s schema alone
+- Keep SQLite working (invariant 11) by leaving `sqlite_store.py`'s schema alone
   for now; collapsing the duplication is Phase 5.
 
 **Exit criteria:** `supabase db push` against a throwaway database produces a
@@ -307,7 +307,7 @@ the Supabase option next to the commented-out self-hosted one.
 ### Phase 4 — Remove the reason the migration was risky
 
 - Apply the §4.1 item-3 change (drop `is_sample` from the archive) so
-  `_live_count` disappears from both adapters, along with invariants 4 and 14
+  `_live_count` disappears from both adapters, along with invariants 4 and 13
   and the index-purge path.
 - Add `ingest_runs` (§4.4) and make `/health` report last-ingest age from the
   database rather than from process memory.

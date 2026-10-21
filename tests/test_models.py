@@ -57,8 +57,6 @@ def test_store_exposes_full_interface():
         "stats",
         "unalerted_urgent_items",
         "mark_alerted",
-        "get_source_cursor",
-        "set_source_cursor",
         "get_source_state",
         "set_source_state",
         "prune_items",
