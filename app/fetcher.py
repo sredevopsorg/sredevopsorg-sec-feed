@@ -672,9 +672,11 @@ async def _fetch_source(source: Source) -> list[FeedItem]:
 # ---------------------------------------------------------------------------
 
 def _sort_key(item: FeedItem):
+    # Publication time is the primary key: urgency stays visible as a badge,
+    # but a week of KEV backlog must not pin the top of a "live" feed.
     published = item.published or datetime.min.replace(tzinfo=timezone.utc)
     published = _ensure_aware(published)
-    return (1 if item.urgent else 0, published)
+    return (published, 1 if item.urgent else 0)
 
 
 def _dedupe(items: list[FeedItem]) -> list[FeedItem]:

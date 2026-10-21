@@ -235,7 +235,7 @@ def query_feed(tag: str | None = None, severity: str | None = None, limit: int =
         params.append(severity)
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY urgent DESC, published DESC, last_seen DESC LIMIT ?"
+    sql += " ORDER BY published DESC, urgent DESC, last_seen DESC LIMIT ?"
     params.append(int(limit))
 
     with _connect(db_path) as conn:
@@ -330,7 +330,7 @@ def search_feed(q: str, tag: str | None = None, severity: str | None = None, lim
         clauses.append("severity = ?")
         params.append(severity)
     sql = "SELECT * FROM feed_items WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY urgent DESC, published DESC, last_seen DESC LIMIT ?"
+    sql += " ORDER BY published DESC, urgent DESC, last_seen DESC LIMIT ?"
     params.append(int(limit))
     with _connect(db_path) as conn:
         rows = conn.execute(sql, params).fetchall()
