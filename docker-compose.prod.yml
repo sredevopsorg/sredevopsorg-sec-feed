@@ -11,7 +11,7 @@
 # then replace the sha256 below (Renovate also raises PRs for these).
 services:
   web:
-    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web@sha256:c58d6454200ab66c4ad6f52401c999abf3ac1c915468104ab306d26772733719
+    image: ghcr.io/sredevopsorg/sredevopsorg-sec-feed:web@sha256:bf546668a22384ad7011e375ac4b3e402e0068be8dc3631e34c4f92e9ec4e42c
     pull_policy: always
     restart: always
 
