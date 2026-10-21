@@ -424,6 +424,24 @@ def set_source_state(
         )
 
 
+def prune_items(before: datetime, db_path: str = DB_PATH) -> int:
+    """Delete non-sample rows last seen before *before*. Returns rows deleted.
+
+    Sample rows are never pruned: they keep an otherwise empty feed renderable.
+    """
+    cutoff = _iso(before)
+    with _connect(db_path) as conn:
+        deleted = conn.execute(
+            "DELETE FROM feed_items WHERE is_sample = 0 AND last_seen < ?", (cutoff,)
+        ).rowcount
+        conn.execute(
+            "DELETE FROM alerted_items WHERE created_at < ? "
+            "AND item_id NOT IN (SELECT id FROM feed_items)",
+            (cutoff,),
+        )
+    return int(deleted or 0)
+
+
 def ping(db_path: str = DB_PATH) -> bool:
     """Cheap readiness probe for the SQLite backend."""
     with _connect(db_path) as conn:

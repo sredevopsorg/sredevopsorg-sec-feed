@@ -239,6 +239,20 @@ def set_source_state(
         )
 
 
+def prune_items(before: datetime, db_path: str = "") -> int:
+    """Delete non-sample rows last seen before *before*. Returns rows deleted."""
+    with _connection() as conn:
+        deleted = conn.execute(
+            "DELETE FROM feed_items WHERE is_sample = FALSE AND last_seen < %s", (before,)
+        ).rowcount
+        conn.execute(
+            "DELETE FROM alerted_items WHERE created_at < %s "
+            "AND item_id NOT IN (SELECT id FROM feed_items)",
+            (before,),
+        )
+    return int(deleted or 0)
+
+
 def ping(db_path: str = "") -> bool:
     """Cheap readiness probe: prove a pooled connection answers a query."""
     with _connection() as conn:

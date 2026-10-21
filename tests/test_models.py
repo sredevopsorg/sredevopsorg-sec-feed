@@ -61,6 +61,7 @@ def test_store_exposes_full_interface():
         "set_source_cursor",
         "get_source_state",
         "set_source_state",
+        "prune_items",
         "close",
     ):
         assert callable(getattr(store, name)), name

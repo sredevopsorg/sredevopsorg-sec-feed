@@ -25,6 +25,7 @@ __all__ = [
     "init_db",
     "mark_alerted",
     "ping",
+    "prune_items",
     "query_feed",
     "search_feed",
     "seed_if_empty",
@@ -75,6 +76,8 @@ class Storage(Protocol):
         payload: list[dict[str, Any]] | None,
         db_path: str = DB_PATH,
     ) -> None: ...
+
+    def prune_items(self, before: datetime, db_path: str = DB_PATH) -> int: ...
 
     def ping(self, db_path: str = DB_PATH) -> bool: ...
 
@@ -152,6 +155,10 @@ def set_source_state(
         payload=payload,
         db_path=db_path,
     )
+
+
+def prune_items(before: datetime, db_path: str = DB_PATH) -> int:
+    return _backend.prune_items(before, db_path)
 
 
 def ping(db_path: str = DB_PATH) -> bool:

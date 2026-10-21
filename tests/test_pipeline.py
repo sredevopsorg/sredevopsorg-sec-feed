@@ -136,6 +136,32 @@ def test_completed_refresh_clears_the_in_flight_handle(monkeypatch):
     assert total == 2
 
 
+def test_prune_runs_at_most_once_per_interval(monkeypatch):
+    from app.config import Settings
+
+    calls = []
+    monkeypatch.setattr(pipeline, "settings", Settings.from_env({"RETENTION_DAYS": "180"}))
+    monkeypatch.setattr(pipeline, "_last_prune_at", None)
+    monkeypatch.setattr(pipeline.store, "prune_items", lambda cutoff: calls.append(cutoff) or 0)
+
+    asyncio.run(pipeline._prune())
+    asyncio.run(pipeline._prune())
+
+    assert len(calls) == 1
+
+
+def test_prune_is_disabled_by_zero_retention(monkeypatch):
+    from app.config import Settings
+
+    calls = []
+    monkeypatch.setattr(pipeline, "settings", Settings.from_env({"RETENTION_DAYS": "0"}))
+    monkeypatch.setattr(pipeline, "_last_prune_at", None)
+    monkeypatch.setattr(pipeline.store, "prune_items", lambda cutoff: calls.append(cutoff) or 0)
+
+    asyncio.run(pipeline._prune())
+    assert calls == []
+
+
 def test_failed_step_is_recorded_without_breaking_the_refresh(monkeypatch):
     """A degraded step must be visible on the cache, not only in the logs."""
 

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import alerts
 from . import fetcher
@@ -41,6 +42,11 @@ class FeedCache:
 CACHE = FeedCache()
 CACHE_LOCK = asyncio.Lock()
 _REFRESH_TASK: asyncio.Task | None = None
+
+# Retention runs at most once a day; the delete is idempotent, so multiple
+# replicas pruning at once is harmless.
+_PRUNE_INTERVAL = 24 * 60 * 60
+_last_prune_at: float | None = None
 
 
 def refresh_in_flight() -> bool:
@@ -97,6 +103,21 @@ async def _index(items: list[FeedItem]) -> None:
     await search.maybe_sync_archive()
 
 
+async def _prune() -> None:
+    """Delete archive rows past RETENTION_DAYS (throttled to once a day)."""
+    global _last_prune_at
+    if settings.retention_days <= 0:
+        return
+    now = time.time()
+    if _last_prune_at is not None and (now - _last_prune_at) < _PRUNE_INTERVAL:
+        return
+    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.retention_days)
+    deleted = await asyncio.to_thread(store.prune_items, cutoff)
+    _last_prune_at = now
+    if deleted:
+        logger.info("Pruned %d feed item(s) older than %d days", deleted, settings.retention_days)
+
+
 async def _publish(generated_at: datetime, count: int) -> None:
     await broker.publish(
         {
@@ -131,6 +152,13 @@ async def refresh_feed() -> list[FeedItem]:
         except Exception:
             CACHE.steps["persist"] = "error"
             logger.exception("Failed to persist feed items")
+
+        try:
+            await _prune()
+            CACHE.steps["prune"] = "ok"
+        except Exception:
+            CACHE.steps["prune"] = "error"
+            logger.exception("Retention pruning failed")
 
         try:
             await _index(items)
