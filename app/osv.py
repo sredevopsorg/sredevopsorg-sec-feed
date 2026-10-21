@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from . import http_client
+from .config import settings
 from .fetcher import FeedItem, _ensure_aware
 
 logger = logging.getLogger(__name__)
@@ -82,9 +83,12 @@ async def _fetch_one(cve: str, client: httpx.AsyncClient) -> tuple[str, dict[str
     return cve, parsed
 
 
-async def fetch_osv(cves: list[str], max_cves: int = MAX_CVES_PER_RUN) -> dict[str, dict[str, Any]]:
+async def fetch_osv(cves: list[str], max_cves: int | None = None) -> dict[str, dict[str, Any]]:
+    limit = settings.osv_max_cves_per_run if max_cves is None else max_cves
     # Deduplicate while preserving caller priority (urgent/recent first).
-    cves = list(dict.fromkeys(cves))[:max_cves]
+    cves = list(dict.fromkeys(cves))
+    if limit > 0:
+        cves = cves[:limit]
     if not cves:
         return {}
     sem = asyncio.Semaphore(MAX_CONCURRENCY)

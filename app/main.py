@@ -167,6 +167,7 @@ async def health() -> dict:
         "status": "ok",
         "cache_fetched_at": cache.fetched_at.isoformat() if cache.fetched_at else None,
         "cache_age_seconds": age,
+        "pipeline": cache.steps,
     }
 
 
