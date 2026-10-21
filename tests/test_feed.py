@@ -291,11 +291,59 @@ def test_sources_are_well_formed():
     ids = [source.id for source in SOURCES]
     assert len(ids) == len(set(ids))
     assert "ossf-malicious" not in ids
+    # Retired sources (ADR-0008, ADR-0009) stay retired.
+    assert {"zeroday", "zeroday-upcoming", "ghsa-helm"}.isdisjoint(ids)
     assert {"k8s-cve", "gcp", "alas", "kev", "ghsa-containerd"} <= set(ids)
+    # ADR-0009 additions: the curated GHSA list covers the runtime layer.
+    assert {"ghsa-envoy", "ghsa-moby", "ghsa-crio"} <= set(ids)
     assert all(source.url.startswith("https://") for source in SOURCES)
     assert all(source.max_items > 0 for source in SOURCES)
     kinds = {"rss", "nvd", "redhat-api", "ghsa", "kev"}
     assert {source.kind for source in SOURCES} <= kinds
+
+
+def test_nvd_stagger_spreads_concurrent_requests(monkeypatch):
+    """Three concurrent NVD requests must start stagger seconds apart.
+
+    The stagger keeps the keyword sources inside NVD's unauthenticated
+    5-requests/30s limit even when they run in the same refresh, so the
+    reservation has to hand out strictly increasing slots while the sleeps
+    happen outside the lock.
+    """
+    from app import fetcher
+
+    stagger = 0.05
+    monkeypatch.setattr(fetcher, "NVD_STAGGER_SECONDS", stagger)
+    starts: list[float] = []
+
+    async def worker():
+        await fetcher._nvd_stagger_slot()
+        starts.append(asyncio.get_running_loop().time())
+
+    async def main():
+        await asyncio.gather(*(worker() for _ in range(3)))
+
+    asyncio.run(main())
+
+    starts.sort()
+    gaps = [later - earlier for earlier, later in zip(starts, starts[1:])]
+    # Waking can only be late, never early, so a small scheduling slop on the
+    # measured gap is enough.
+    assert min(gaps) >= stagger - 0.01
+
+
+def test_nvd_stagger_rebuilds_lock_for_a_new_loop():
+    """A fresh event loop must not inherit the previous loop's lock."""
+    from app import fetcher
+
+    async def use_slot():
+        await fetcher._nvd_stagger_slot()
+        return fetcher._nvd_slot_loop
+
+    first_loop = asyncio.run(use_slot())
+    second_loop = asyncio.run(use_slot())
+    assert second_loop is not first_loop
+    assert fetcher._nvd_slot_loop is second_loop
 
 
 def test_nvd_window_url_uses_a_bounded_date_window():

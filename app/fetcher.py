@@ -446,6 +446,41 @@ def _nvd_reference_url(cve: dict[str, Any]) -> str:
     return f"https://nvd.nist.gov/vuln/detail/{cve.get('id')}"
 
 
+# NVD rate-limits unauthenticated clients to 5 requests per rolling 30 s.
+# The three keyword sources fire concurrently on every refresh (and each may
+# retry once after a transport failure), which intermittently trips that limit
+# into a ReadTimeout. A shared start slot spreads the requests: every NVD
+# request waits until NVD_STAGGER_SECONDS after the previous one started.
+# The wait happens inside the background refresh only — no API request path
+# ever awaits it.
+NVD_STAGGER_SECONDS = 2.0
+_nvd_slot_lock: asyncio.Lock | None = None
+_nvd_slot_loop: asyncio.AbstractEventLoop | None = None
+_nvd_next_start = 0.0
+
+
+async def _nvd_stagger_slot() -> None:
+    """Reserve the next start slot for a request against the NVD host.
+
+    Reservation happens under a lock; the sleep happens outside it, so all
+    callers reserve their slots immediately and only the earliest ones wait.
+    The lock is rebuilt when the running loop changes (tests create a fresh
+    loop per ``asyncio.run``; production runs one long-lived loop).
+    """
+    global _nvd_slot_lock, _nvd_slot_loop, _nvd_next_start
+    loop = asyncio.get_running_loop()
+    if _nvd_slot_lock is None or _nvd_slot_loop is not loop:
+        _nvd_slot_lock = asyncio.Lock()
+        _nvd_slot_loop = loop
+        _nvd_next_start = 0.0
+    async with _nvd_slot_lock:
+        now = loop.time()
+        start = max(now, _nvd_next_start)
+        _nvd_next_start = start + NVD_STAGGER_SECONDS
+    if start > now:
+        await asyncio.sleep(start - now)
+
+
 def _nvd_window_url(
     source_url: str,
     results_per_page: int,
@@ -514,6 +549,9 @@ async def _fetch_nvd(source: Source, client: httpx.AsyncClient) -> list[FeedItem
     days = max(1, settings.nvd_window_days)
     # One page large enough to cover a whole week of matches for this keyword.
     page_size = max(100, source.max_items * 10)
+    # Respect NVD's unauthenticated rate limit even when all keyword sources
+    # (or their retries) run in the same refresh.
+    await _nvd_stagger_slot()
     resp = await client.get(_nvd_window_url(source.url, page_size, days))
     resp.raise_for_status()
     data = resp.json()
@@ -523,6 +561,7 @@ async def _fetch_nvd(source: Source, client: httpx.AsyncClient) -> list[FeedItem
         # Rare: the window holds more matches than one page. Jump to the last
         # page so the newest window CVEs are the ones kept (NVD lists matches
         # in ascending publication order).
+        await _nvd_stagger_slot()
         resp = await client.get(
             _nvd_window_url(
                 source.url, source.max_items, days, start_index=max(0, total - source.max_items)

@@ -76,9 +76,7 @@ is hosted on a different origin from the API.
 | CISA Cybersecurity Advisories (topic-filtered) | RSS | Threats |
 | NVD CVE 2.0 (`linux kernel`, `kubernetes`, `cloud` queries) | JSON API | CVE |
 | CISA KEV — newly exploited (last 7 days) | JSON API | Exploited in the wild |
-| GHSA — containerd, runc, Helm, Argo CD, Istio | GitHub Advisory API | Kubernetes / cloud-native |
-| ZDI Published Advisories | RSS | Exploit / zero-day |
-| ZDI Upcoming Advisories | RSS | Exploit / zero-day |
+| GHSA — containerd, runc, Argo CD, Istio, Envoy, Moby, CRI-O | GitHub Advisory API | Kubernetes / cloud-native |
 
 ### Notes on source handling
 
@@ -88,22 +86,24 @@ is hosted on a different origin from the API.
 - NVD queries use a bounded `pubStartDate` window (`NVD_WINDOW_DAYS`, default
   7). One page covers the whole window for every keyword we query, so a
   refresh costs one request per NVD source; a rare overflow probes the last
-  page instead.
+  page instead. The keyword queries start at least `NVD_STAGGER_SECONDS`
+  (2 s) apart so concurrent fetches stay inside NVD's unauthenticated
+  5-requests/30 s limit.
 - CISA is the only broad feed still filtered for relevance: its ICS/OT
   advisories are dropped.
 - The CISA KEV source publishes catalog entries added in the last
   `KEV_SOURCE_DAYS` (default 7) days. They are urgent by definition, and they
   close the gap for exploited CVEs that no keyword feed mentions — enrichment
-  alone only flags CVEs another source already published.
+  alone only flags CVEs another source already published. The KEV catalog and
+  the GHSA sources cover confirmed exploitation and upstream advisories,
+  which is also why the retired ZDI zero-day feeds are not replaced with a
+  like-for-like source.
 - The GHSA sources issue one GitHub Advisory Database query per curated
-  package (`containerd`, `runc`, `helm`, `argo-cd`, `istio`). Add a package
-  by appending a `Source` in `app/sources.py`; set `GITHUB_TOKEN` to raise
-  the unauthenticated 60-request/hour limit.
+  package (`containerd`, `runc`, `argo-cd`, `istio`, `envoy`, `moby`,
+  `cri-o`). Add a package by appending a `Source` in `app/sources.py`; set
+  `GITHUB_TOKEN` to raise the unauthenticated 60-request/hour limit.
 - Amazon Linux 2023 publishes its full errata history in one feed (~1.5 MB);
   items are capped by `max_items`.
-- ZDI Published and Upcoming are exploit/zero-day focused and are ingested
-  without the Linux/cloud/Kubernetes relevance filter; their items carry the
-  `zeroday` tag.
 - If a source fails, the rest of the feed continues. If **all** live sources
   fail, the server serves realistic sample items so the UI is always usable.
 
@@ -639,8 +639,9 @@ Items are ordered by publication time, with urgency as a badge and tiebreaker.
 
 - **Tags** are inferred from source scope plus title/summary keywords. The
   core set is `linux`, `cloud`, `kubernetes`, `cve`, `exploit`, `patch`,
-  `threat`; enrichment and the KEV source add `kev` for known-exploited CVEs,
-  and the ZDI sources add `zeroday`.
+  `threat`; enrichment and the KEV source add `kev` for known-exploited CVEs.
+  Historical items may still carry the `zeroday` tag from the retired ZDI
+  sources; it is no longer added to new items.
 - **Severity** comes from CVSS when available, otherwise from textual heuristics.
 - **Urgent** items are critical/high-severity and exploitation-related, plus
   every KEV-source item (CISA has confirmed exploitation); they render the red
