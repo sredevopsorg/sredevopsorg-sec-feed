@@ -119,7 +119,7 @@ def _reset_pool() -> None:
 
 
 # ``init_db`` verifies the schema produced by ``migrations/0001_baseline.sql``.
-_REQUIRED_TABLES = ("feed_items", "alerted_items", "source_cursors")
+_REQUIRED_TABLES = ("feed_items", "alerted_items", "source_cursors", "source_state")
 
 
 
@@ -177,6 +177,65 @@ def init_db(db_path: str = "") -> None:
             detail += f", missing tables={missing}"
         raise SchemaNotMigrated(
             f"database schema is not current ({detail}); run `python -m app.migrate upgrade`"
+        )
+
+
+def get_source_state(source_id: str, db_path: str = "") -> dict[str, Any] | None:
+    with _connection() as conn:
+        row = conn.execute("SELECT * FROM source_state WHERE source_id = %s", (source_id,)).fetchone()
+    if row is None:
+        return None
+
+    def _ts(value: Any) -> Any:
+        return value.isoformat() if isinstance(value, datetime) else value
+
+    return {
+        "source_id": row["source_id"],
+        "etag": row["etag"],
+        "last_modified": row["last_modified"],
+        "last_fetched_at": _ts(row["last_fetched_at"]),
+        "last_ok_at": _ts(row["last_ok_at"]),
+        "last_error": row["last_error"],
+        "last_payload": row["last_payload"],
+    }
+
+
+def set_source_state(
+    source_id: str,
+    *,
+    etag: str | None,
+    last_modified: str | None,
+    fetched_at: datetime | None,
+    ok: bool,
+    error: str | None,
+    payload: list[dict[str, Any]] | None,
+    db_path: str = "",
+) -> None:
+    """Record one fetch attempt, preserving validators/payload when not supplied."""
+    now = datetime.now(timezone.utc)
+    with _connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO source_state
+                (source_id, etag, last_modified, last_fetched_at, last_ok_at, last_error, last_payload)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT(source_id) DO UPDATE SET
+                etag = COALESCE(EXCLUDED.etag, source_state.etag),
+                last_modified = COALESCE(EXCLUDED.last_modified, source_state.last_modified),
+                last_fetched_at = EXCLUDED.last_fetched_at,
+                last_ok_at = COALESCE(EXCLUDED.last_ok_at, source_state.last_ok_at),
+                last_error = EXCLUDED.last_error,
+                last_payload = COALESCE(EXCLUDED.last_payload, source_state.last_payload)
+            """,
+            (
+                source_id,
+                etag,
+                last_modified,
+                fetched_at or now,
+                now if ok else None,
+                error,
+                json.dumps(payload) if payload is not None else None,
+            ),
         )
 
 

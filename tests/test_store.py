@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.fetcher import FeedItem
-from app.store import init_db, mark_alerted, ping, query_feed, search_feed, seed_if_empty, stats, unalerted_urgent_items, upsert_items
+from app.store import get_source_state, init_db, mark_alerted, ping, query_feed, search_feed, seed_if_empty, set_source_state, stats, unalerted_urgent_items, upsert_items
 
 
 def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = frozenset({"linux"}), cves: list[str] | None = None, severity: str = "high", urgent: bool = False, patch_status: str = "unknown", published: datetime | None = None) -> FeedItem:
@@ -118,6 +118,41 @@ def test_patch_status_roundtrip(tmp_path):
     rows = query_feed(limit=50, db_path=db)
     row = next(r for r in rows if r["id"] == "p")
     assert row["patch_status"] == "fixed"
+
+
+def test_source_state_roundtrip_preserves_payload(tmp_path):
+    db = str(tmp_path / "feed.db")
+    init_db(db)
+    assert get_source_state("rss", db_path=db) is None
+
+    set_source_state(
+        "rss",
+        etag='"abc"',
+        last_modified="Wed, 21 Oct 2026 07:28:00 GMT",
+        fetched_at=datetime.now(timezone.utc),
+        ok=True,
+        error=None,
+        payload=[{"id": "a", "title": "t"}],
+        db_path=db,
+    )
+    state = get_source_state("rss", db_path=db)
+    assert state["etag"] == '"abc"'
+    assert state["last_payload"] == [{"id": "a", "title": "t"}]
+
+    # A later 304-style write without a payload must not erase the cached one.
+    set_source_state(
+        "rss",
+        etag=None,
+        last_modified=None,
+        fetched_at=datetime.now(timezone.utc),
+        ok=True,
+        error=None,
+        payload=None,
+        db_path=db,
+    )
+    state = get_source_state("rss", db_path=db)
+    assert state["etag"] == '"abc"'
+    assert state["last_payload"] == [{"id": "a", "title": "t"}]
 
 
 def test_ping(tmp_path):

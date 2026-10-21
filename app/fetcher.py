@@ -19,7 +19,7 @@ from typing import Any
 import feedparser
 import httpx
 
-from . import http_client
+from . import http_client, store
 from .config import settings
 from .models import (
     FeedItem,
@@ -28,6 +28,7 @@ from .models import (
     _sample_items,
     _tag_priority,
     _time_ago,
+    item_from_dict,
     item_to_dict,
 )
 from .sources import SOURCES, Source
@@ -126,6 +127,79 @@ HTTP_TIMEOUT = http_client.HTTP_TIMEOUT
 USER_AGENT = http_client.USER_AGENT
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "unknown": 0}
+
+# A source that is not due yet. Distinct from a failure: it must not appear in
+# source_errors and must never trigger the sample fallback.
+SKIPPED = object()
+
+
+def _load_state(source_id: str) -> dict[str, Any] | None:
+    """Read the stored fetch state, degrading to an unconditional fetch."""
+    try:
+        return store.get_source_state(source_id)
+    except Exception:
+        logger.warning("Could not read fetch state for %s; fetching unconditionally", source_id)
+        return None
+
+
+def _save_state(
+    source: Source,
+    *,
+    etag: str | None = None,
+    last_modified: str | None = None,
+    payload: list[dict[str, Any]] | None = None,
+    ok: bool = True,
+    error: str | None = None,
+) -> None:
+    """Persist a fetch attempt; failures here never break the refresh."""
+    try:
+        store.set_source_state(
+            source.id,
+            etag=etag,
+            last_modified=last_modified,
+            fetched_at=datetime.now(timezone.utc),
+            ok=ok,
+            error=error,
+            payload=payload,
+        )
+    except Exception:
+        logger.warning("Could not persist fetch state for %s", source.id)
+
+
+def _validator_headers(state: dict[str, Any] | None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if state:
+        if state.get("etag"):
+            headers["If-None-Match"] = str(state["etag"])
+        if state.get("last_modified"):
+            headers["If-Modified-Since"] = str(state["last_modified"])
+    return headers
+
+
+def _stored_items(state: dict[str, Any] | None) -> list[FeedItem] | None:
+    """Rebuild items from the stored payload, or None when it is unusable."""
+    payload = (state or {}).get("last_payload")
+    if not payload:
+        return None
+    try:
+        return [item_from_dict(row) for row in payload]
+    except Exception:
+        logger.warning("Stored source payload is unusable; refetching without validators")
+        return None
+
+
+def _is_due(source: Source, state: dict[str, Any] | None) -> bool:
+    """False while the source is inside its minimum fetch interval."""
+    if source.min_interval_seconds <= 0 or not state:
+        return True
+    raw = state.get("last_fetched_at")
+    if not raw:
+        return True
+    try:
+        last = _ensure_aware(datetime.fromisoformat(str(raw)))
+    except ValueError:
+        return True
+    return (datetime.now(timezone.utc) - last).total_seconds() >= source.min_interval_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +362,20 @@ def _redhat_patch_status(row: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 async def _fetch_rss(source: Source, client: httpx.AsyncClient) -> list[FeedItem]:
-    resp = await client.get(source.url)
+    state = _load_state(source.id)
+    validators = _validator_headers(state)
+    resp = await client.get(source.url, headers=validators) if validators else await client.get(source.url)
+    if resp.status_code == 304:
+        cached = _stored_items(state)
+        if cached is not None:
+            _save_state(
+                source,
+                etag=resp.headers.get("etag") or (state or {}).get("etag"),
+                last_modified=resp.headers.get("last-modified") or (state or {}).get("last_modified"),
+            )
+            return cached[: source.max_items]
+        # Validators without a usable payload: refetch the body once.
+        resp = await client.get(source.url)
     resp.raise_for_status()
     parsed = feedparser.parse(resp.content)
     items: list[FeedItem] = []
@@ -324,6 +411,12 @@ async def _fetch_rss(source: Source, client: httpx.AsyncClient) -> list[FeedItem
                 patch_status=patch_status,
             )
         )
+    _save_state(
+        source,
+        etag=resp.headers.get("etag"),
+        last_modified=resp.headers.get("last-modified"),
+        payload=[item_to_dict(item) for item in items[: source.max_items]],
+    )
     return items
 
 
@@ -533,7 +626,20 @@ async def _fetch_ghsa(source: Source, client: httpx.AsyncClient) -> list[FeedIte
     (containerd, runc, Helm, Argo CD, Istio) as GHSA entries with linked
     CVEs. Only the curated package is queried: one request per package.
     """
-    resp = await client.get(source.url, headers=_github_headers())
+    state = _load_state(source.id)
+    headers = _github_headers()
+    headers.update(_validator_headers(state))
+    resp = await client.get(source.url, headers=headers)
+    if resp.status_code == 304:
+        cached = _stored_items(state)
+        if cached is not None:
+            _save_state(
+                source,
+                etag=resp.headers.get("etag") or (state or {}).get("etag"),
+                last_modified=resp.headers.get("last-modified") or (state or {}).get("last_modified"),
+            )
+            return cached[: source.max_items]
+        resp = await client.get(source.url, headers=_github_headers())
     resp.raise_for_status()
     rows = resp.json()
     if not isinstance(rows, list):
@@ -576,7 +682,14 @@ async def _fetch_ghsa(source: Source, client: httpx.AsyncClient) -> list[FeedIte
         key=lambda item: item.published or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
     )
-    return items[: source.max_items]
+    items = items[: source.max_items]
+    _save_state(
+        source,
+        etag=resp.headers.get("etag"),
+        last_modified=resp.headers.get("last-modified"),
+        payload=[item_to_dict(item) for item in items],
+    )
+    return items
 
 
 # Connect-phase failures to upstream hosts are intermittently transient: the
@@ -629,29 +742,53 @@ def _describe_fetch_error(source: Source, exc: BaseException) -> str:
     return f"{source.id}: {kind} reaching {host}"
 
 
-async def _fetch_source_once(source: Source) -> list[FeedItem]:
-    if source.kind == "ossf-malicious":
-        from . import ossf
+async def _fetch_source_once(source: Source) -> list[FeedItem] | object:
+    state = _load_state(source.id)
+    if not _is_due(source, state):
+        # Not due yet: not an error, and not a reason to serve samples.
+        return SKIPPED
+    try:
+        if source.kind == "ossf-malicious":
+            from . import ossf
 
-        items, _ = await ossf.fetch_recent_reports()
-        return items[: source.max_items]
-    if source.kind == "kev":
-        from . import enrich
+            items, _ = await ossf.fetch_recent_reports()
+            items = items[: source.max_items]
+        elif source.kind == "kev":
+            from . import enrich
 
-        return await enrich.fetch_recent_kev(source)
-    async with http_client.client() as client:
-        if source.kind == "rss":
-            return await _fetch_rss(source, client)
-        if source.kind == "nvd":
-            return await _fetch_nvd(source, client)
-        if source.kind == "redhat-api":
-            return await _fetch_redhat(source, client)
-        if source.kind == "ghsa":
-            return await _fetch_ghsa(source, client)
-    return []
+            items = await enrich.fetch_recent_kev(source)
+        else:
+            async with http_client.client() as client:
+                if source.kind == "rss":
+                    # Saves its own state (validators + payload).
+                    return await _fetch_rss(source, client)
+                if source.kind == "ghsa":
+                    # Saves its own state (validators + payload).
+                    return await _fetch_ghsa(source, client)
+                if source.kind == "nvd":
+                    items = await _fetch_nvd(source, client)
+                elif source.kind == "redhat-api":
+                    items = await _fetch_redhat(source, client)
+                else:
+                    items = []
+        _save_state(
+            source,
+            etag=(state or {}).get("etag"),
+            last_modified=(state or {}).get("last_modified"),
+        )
+        return items
+    except Exception as exc:
+        _save_state(
+            source,
+            etag=(state or {}).get("etag"),
+            last_modified=(state or {}).get("last_modified"),
+            ok=False,
+            error=f"{type(exc).__name__}: {exc}"[:500],
+        )
+        raise
 
 
-async def _fetch_source(source: Source) -> list[FeedItem]:
+async def _fetch_source(source: Source) -> list[FeedItem] | object:
     """Fetch one source, retrying once when the connection itself fails."""
     last_exc: BaseException | None = None
     for attempt in range(FETCH_ATTEMPTS):
@@ -709,16 +846,22 @@ async def fetch_all() -> tuple[list[FeedItem], list[str]]:
         return_exceptions=True,
     )
     items: list[FeedItem] = []
+    skipped = 0
     for source, result in zip(SOURCES, results):
+        if result is SKIPPED:
+            skipped += 1
+            continue
         if isinstance(result, BaseException):
             errors.append(_describe_fetch_error(source, result))
             continue
         items.extend(result)
-    if not items:
+    # A skipped source is healthy, just not due. Serving samples here would
+    # write fallback rows over a live archive.
+    if not items and skipped == 0:
         logger.warning("All live sources failed or returned empty; serving sample feed")
         items = _sample_items()
-    elif len(items) < 4:
-        # Always keep the sample feed available if the live feed is tiny.
+    elif items and len(items) < 4 and skipped == 0:
+        # Keep the sample feed available only when no source was skipped.
         items.extend(_sample_items())
     return _dedupe(items), errors
 

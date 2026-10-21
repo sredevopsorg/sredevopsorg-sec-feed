@@ -12,7 +12,7 @@ Database for one curated package), "kev" (CISA KEV catalog additions) and
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,10 @@ class Source:
     url: str
     tags: frozenset[str] = field(default_factory=frozenset)
     max_items: int = 12
+    # Minimum seconds between fetches of this source. 0 means every refresh.
+    # Large, slow-changing feeds (ALAS ~1.5 MB, CISA ~1.4 MB) do not need a
+    # 10-minute poll; see the conditional-GET support in app/fetcher.py.
+    min_interval_seconds: int = 0
 
 
 SOURCES: list[Source] = [
@@ -190,3 +194,31 @@ SOURCES: list[Source] = [
         max_items=5,
     ),
 ]
+
+# Cadence policy kept in one place: a feed that changes daily does not need a
+# poll every ten minutes. Feeds with ETag/Last-Modified additionally send
+# conditional requests, so an unchanged body costs a 304 instead of megabytes.
+_MIN_INTERVALS: dict[str, int] = {
+    "ubuntu": 1800,
+    "debian": 1800,
+    "redhat": 3600,
+    "k8s-cve": 1800,
+    "gcp": 1800,
+    "alas": 3600,
+    "aws": 1800,
+    "cisa": 3600,
+    "nvd-linux": 3600,
+    "nvd-kubernetes": 3600,
+    "nvd-cloud": 3600,
+    "kev": 3600,
+    "ghsa-containerd": 3600,
+    "ghsa-runc": 3600,
+    "ghsa-argo-cd": 3600,
+    "ghsa-helm": 3600,
+    "ghsa-istio": 3600,
+    "ossf-malicious": 600,
+    "zeroday": 1800,
+    "zeroday-upcoming": 1800,
+}
+
+SOURCES = [replace(source, min_interval_seconds=_MIN_INTERVALS.get(source.id, 0)) for source in SOURCES]
