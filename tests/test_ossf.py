@@ -1,3 +1,5 @@
+import asyncio
+
 import app.fetcher as fetcher
 import app.ossf as ossf
 from app.ossf import _build_item, _is_relevant_ossf
@@ -53,3 +55,75 @@ def test_build_item_uppercases_lowercase_cve_ids():
 def test_ossf_uses_the_shared_cve_extractor():
     """OSSF must not carry a second, divergent CVE extractor."""
     assert ossf._extract_cves is fetcher._extract_cves
+
+
+# ---------------------------------------------------------------------------
+# Commit-cursor pagination (a busy day must not skip reports)
+# ---------------------------------------------------------------------------
+
+def _commit(sha: str) -> dict:
+    return {"sha": sha}
+
+
+class _Response:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self):
+        return self._data
+
+
+class _Pages:
+    """Fake client returning one page of commits per page number."""
+
+    def __init__(self, pages: dict, default=None):
+        self.pages = pages
+        self.default = default
+        self.requested: list[int] = []
+
+    async def get(self, url, params=None, headers=None):
+        page = (params or {}).get("page", 1)
+        self.requested.append(page)
+        return _Response(self.pages.get(page, self.default or []))
+
+
+def test_collect_new_commits_stops_at_the_cursor():
+    client = _Pages({1: [_commit("a"), _commit("b"), _commit("cursor"), _commit("z")]})
+    new, advance = asyncio.run(ossf._collect_new_commits(client, "cursor", 5))
+    assert [c["sha"] for c in new] == ["a", "b"]
+    assert advance == "a"
+    assert client.requested == [1]
+
+
+def test_collect_new_commits_pages_back_when_the_cursor_is_older():
+    """A full first page without the cursor must not be treated as the end."""
+    client = _Pages({1: [_commit("a"), _commit("b")], 2: [_commit("cursor"), _commit("d")]})
+    new, advance = asyncio.run(ossf._collect_new_commits(client, "cursor", 2))
+    assert [c["sha"] for c in new] == ["a", "b"]
+    assert advance == "a"
+    assert client.requested == [1, 2]
+
+
+def test_collect_new_commits_handles_a_stale_cursor_at_history_start():
+    client = _Pages({1: [_commit("a")]})  # shorter than per_page => no more history
+    new, advance = asyncio.run(ossf._collect_new_commits(client, "gone", 2))
+    assert [c["sha"] for c in new] == ["a"]
+    assert advance == "a"
+
+
+def test_collect_new_commits_never_advances_past_unseen_commits():
+    """At the page limit with the cursor still missing, the cursor stays put."""
+    client = _Pages({}, default=[_commit("x")])  # every page full, cursor never seen
+    new, advance = asyncio.run(ossf._collect_new_commits(client, "gone", 1))
+    assert advance is None
+    assert len(new) == ossf.MAX_PAGES
+
+
+def test_collect_new_commits_first_run_only_takes_the_newest():
+    client = _Pages({1: [_commit("newest"), _commit("old")]})
+    new, advance = asyncio.run(ossf._collect_new_commits(client, None, 5))
+    assert [c["sha"] for c in new] == ["newest"]
+    assert advance == "newest"
