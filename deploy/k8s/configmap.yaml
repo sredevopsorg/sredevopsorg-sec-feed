@@ -5,9 +5,11 @@ metadata:
 data:
   LOG_LEVEL: "DEBUG"
 
-  # Comma-separated allowed CORS origins. An empty or unset value denies every
-  # cross-origin caller; "*" allows all of them.
-  CORS_ORIGINS: "*"
+  # Comma-separated allowed CORS origins. The default (unset) denies every
+  # cross-origin caller, which is correct for the bundled same-origin
+  # frontend. Set an explicit allow-list only when hosting the UI elsewhere;
+  # never ship "*".
+  # CORS_ORIGINS: "https://feed.example.com"
 
   # Rate limiting / SSE tuning.
   RATE_LIMIT_PER_MINUTE: "120"
