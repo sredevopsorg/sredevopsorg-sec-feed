@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.fetcher import FeedItem
-from app.store import get_source_state, init_db, mark_alerted, ping, query_feed, search_feed, seed_if_empty, set_source_state, stats, unalerted_urgent_items, upsert_items
+from app.store import get_source_state, init_db, mark_alerted, ping, prune_items, query_feed, search_feed, seed_if_empty, set_source_state, stats, unalerted_urgent_items, upsert_items
 
 
 def make_item(id: str = "a", title: str = "Test advisory", tags: set[str] = frozenset({"linux"}), cves: list[str] | None = None, severity: str = "high", urgent: bool = False, patch_status: str = "unknown", published: datetime | None = None) -> FeedItem:
@@ -138,6 +138,29 @@ def test_source_state_roundtrip_preserves_payload(tmp_path):
     state = get_source_state("rss", db_path=db)
     assert state["etag"] == '"abc"'
     assert state["last_payload"] == [{"id": "a", "title": "t"}]
+
+
+def test_prune_items_keeps_samples_and_recent_rows(tmp_path):
+    import sqlite3
+
+    db = str(tmp_path / "feed.db")
+    init_db(db)
+    sample = make_item("sample", "Sample advisory")
+    sample.is_sample = True
+    upsert_items([make_item("old", "Old advisory"), make_item("new", "New advisory"), sample], db)
+
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE feed_items SET last_seen = '2020-01-01T00:00:00+00:00' WHERE id IN ('old', 'sample')"
+    )
+    conn.commit()
+    conn.close()
+
+    assert prune_items(datetime(2021, 1, 1, tzinfo=timezone.utc), db_path=db) == 1
+    conn = sqlite3.connect(db)
+    remaining = {row[0] for row in conn.execute("SELECT id FROM feed_items")}
+    conn.close()
+    assert remaining == {"new", "sample"}
 
 
 def test_ping(tmp_path):
