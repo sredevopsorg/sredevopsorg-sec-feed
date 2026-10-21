@@ -6,7 +6,7 @@ from fastapi.routing import APIRoute
 from starlette.middleware.cors import CORSMiddleware
 from starlette.routing import Mount
 
-from app import main
+from app import VERSION, main
 from app.config import Settings
 from app.events import Broker
 from app.main import api_index, app
@@ -88,7 +88,7 @@ def test_events_returns_503_when_subscriber_cap_reached(monkeypatch):
 def test_api_index_describes_endpoints():
     assert asyncio.run(api_index()) == {
         "name": "Security Intelligence Live Feed API",
-        "version": "1.1.2",
+        "version": VERSION,
         "endpoints": [
             "/health",
             "/ready",

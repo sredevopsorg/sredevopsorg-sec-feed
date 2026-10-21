@@ -170,6 +170,27 @@ one PR per finding, each with its own tests and verification notes:
     grants are revoked, and `/health` no longer queries the database
     (`/ready` + cached `/api/stats` added).
 
+22. **`fix/feed-correctness`** — unknown publication times stay `null` instead
+    of being rendered as "just now"; ambiguous short tokens (`rce`, `poc`, `apt`,
+    `runc`, `suse`, `aws`) match on word boundaries; KEV severity is derived
+    from CVSS text when present.
+23. **`fix/feed-ordering`** — publication time is the primary sort key in both
+    adapters and `_sort_key`; urgency remains a badge/tiebreaker.
+24. **`fix/k8s-readiness`** — readiness uses `/ready` (not the DB-free
+    `/health`), the API root filesystem is read-only, all capabilities are
+    dropped, and the shipped ConfigMap no longer sets `CORS_ORIGINS="*"`.
+25. **`fix/ossf-cursor`** — the malicious-packages cursor pages back until the
+    stored commit is found and never advances past unseen commits.
+26. **`feat/source-conditional-fetch`** — `source_state` plus conditional GET
+    and per-source minimum intervals; `FEED_CACHE_TTL` replaces the hardcoded
+    refresh constant. (The KEV catalog was already cached 24 h in-process, so
+    it was never part of the repeated download.)
+27. **`feat/enrichment-visibility`** — EPSS requests are chunked at the API's
+    100-CVE limit, OSV's cap is configurable, and `/api/stats`/`/health` report
+    enrichment coverage and per-step pipeline status.
+28. **`feat/retention`** — `prune_items` plus a daily-throttled retention step
+    bound `feed_items`.
+
 ## 6. Remaining follow-ups (deferred, not blocking)
 
 - Type the API responses with Pydantic models (observation #7).
@@ -178,8 +199,8 @@ one PR per finding, each with its own tests and verification notes:
 - Consider dependency injection for the remaining module-level globals
   (`CACHE`, `broker`, `_kev_cache`, `_osv_cache`, `_last_sync_at`) if the app
   ever grows beyond a single process (observation #5).
-- Add a linter/formatter (e.g. ruff) to CI; the repository still documents
-  "none configured", so style is enforced by review only.
+- Add a linter/formatter (e.g. ruff) to CI; deferred until the open Renovate
+  dependency PRs merge, because it changes `pyproject.toml` and `uv.lock`.
 - Remove persisted sample rows and the `is_sample` hiding rule (Phase 4 in the
   Supabase plan) once the API-edge fallback exists.
 - Cross-replica single-flight (advisory lock + `ingest_runs`) and optional

@@ -1,6 +1,6 @@
 [project]
 name = "sredevopsorg-sec-feed"
-version = "1.1.1"
+version = "1.1.2"
 description = "Security intelligence feed for Linux, cloud, and Kubernetes"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
