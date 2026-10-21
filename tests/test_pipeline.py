@@ -253,14 +253,14 @@ def test_describe_fetch_error_falls_back_to_the_cause_chain():
     exc = httpx.ConnectError("")
     exc.__cause__ = OSError("Network is unreachable")
     source = Source(
-        id="ossf-malicious",
-        name="OpenSSF",
-        kind="ossf-malicious",
-        url="https://api.github.com/repos/ossf/malicious-packages",
+        id="ghsa-helm",
+        name="GHSA — Helm",
+        kind="ghsa",
+        url="https://api.github.com/advisories?affects=github.com/helm/helm",
     )
 
     assert fetcher._describe_fetch_error(source, exc) == (
-        "ossf-malicious: ConnectError: Network is unreachable"
+        "ghsa-helm: ConnectError: Network is unreachable"
     )
 
 
@@ -314,10 +314,10 @@ def test_fetch_source_does_not_retry_an_http_error_response(monkeypatch):
 
     monkeypatch.setattr(fetcher, "_fetch_source_once", forbidden)
     source = Source(
-        id="ossf-malicious",
-        name="OpenSSF",
-        kind="ossf-malicious",
-        url="https://api.github.com/repos/ossf/malicious-packages",
+        id="ghsa-helm",
+        name="GHSA — Helm",
+        kind="ghsa",
+        url="https://api.github.com/advisories?affects=github.com/helm/helm",
     )
 
     with pytest.raises(httpx.HTTPStatusError):

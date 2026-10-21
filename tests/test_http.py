@@ -49,13 +49,15 @@ def test_only_http_client_builds_outbound_clients():
     assert offenders == []
 
 
-def test_ossf_client_keeps_github_headers_and_shared_agent():
-    from app import ossf
+def test_github_headers_send_the_token_only_when_configured(monkeypatch):
+    """GHSA is the remaining GitHub API consumer; the token stays optional."""
+    from app import fetcher
+    from app.config import Settings
 
-    client = ossf._client()
-    try:
-        assert client.headers["User-Agent"] == http_client.USER_AGENT
-        assert client.headers["Accept"] == "application/vnd.github+json"
-        assert client.timeout == httpx.Timeout(15.0)
-    finally:
-        _close(client)
+    monkeypatch.setattr(fetcher, "settings", Settings.from_env({}))
+    assert "Authorization" not in fetcher._github_headers()
+
+    monkeypatch.setattr(fetcher, "settings", Settings.from_env({"GITHUB_TOKEN": "tok"}))
+    headers = fetcher._github_headers()
+    assert headers["Accept"] == "application/vnd.github+json"
+    assert headers["Authorization"] == "Bearer tok"

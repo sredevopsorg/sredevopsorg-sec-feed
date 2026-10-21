@@ -125,7 +125,7 @@ class Settings:
     max_sse_subscribers: int
     # Logging
     log_level: str
-    # Sources: GitHub token (OSSF + GHSA) and NVD/KEV recent windows
+    # Sources: GitHub token (GHSA) and NVD/KEV recent windows
     github_token: str | None
     nvd_window_days: int
     kev_source_days: int

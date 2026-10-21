@@ -59,7 +59,9 @@ def test_schema_and_least_privilege_grants(migrated):
             row["tablename"]
             for row in conn.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
         }
-        assert {"feed_items", "alerted_items", "source_cursors", "feed_schema_migrations"} <= tables
+        assert {"feed_items", "alerted_items", "source_state", "feed_schema_migrations"} <= tables
+        # 0003 retires the OSSF source and drops its cursor table.
+        assert "source_cursors" not in tables
 
         # The runtime role can do DML...
         assert conn.execute(
@@ -99,8 +101,8 @@ def test_bootstrap_role_allows_login_but_not_ddl(migrated):
         assert conn.execute("SELECT count(*) AS n FROM feed_items").fetchone()["n"] >= 0
         # DML is allowed; roll it back so the test leaves no row behind.
         conn.execute(
-            "INSERT INTO source_cursors (source_id, cursor, updated_at) "
-            "VALUES ('migrate-test', 'x', now())"
+            "INSERT INTO alerted_items (item_id, created_at) "
+            "VALUES ('migrate-test', now())"
         )
         conn.rollback()
         with pytest.raises(psycopg.errors.InsufficientPrivilege):

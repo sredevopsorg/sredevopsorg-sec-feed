@@ -6,8 +6,7 @@ fetcher.py for non-RSS APIs).
 
 Kinds: "rss" (plain feeds, including Atom), "nvd" (NVD API 2.0 window
 queries), "redhat-api" (Red Hat security-data JSON), "ghsa" (GitHub Advisory
-Database for one curated package), "kev" (CISA KEV catalog additions) and
-"ossf-malicious" (OpenSSF Malicious Packages commits).
+Database for one curated package) and "kev" (CISA KEV catalog additions).
 """
 
 from __future__ import annotations
@@ -170,14 +169,6 @@ SOURCES: list[Source] = [
         max_items=5,
     ),
     Source(
-        id="ossf-malicious",
-        name="OpenSSF Malicious Packages",
-        kind="ossf-malicious",
-        url="https://api.github.com/repos/ossf/malicious-packages",
-        tags=frozenset({"malware", "supply-chain"}),
-        max_items=10,
-    ),
-    Source(
         id="zeroday",
         name="ZDI Published Advisories",
         kind="rss",
@@ -216,7 +207,6 @@ _MIN_INTERVALS: dict[str, int] = {
     "ghsa-argo-cd": 3600,
     "ghsa-helm": 3600,
     "ghsa-istio": 3600,
-    "ossf-malicious": 600,
     "zeroday": 1800,
     "zeroday-upcoming": 1800,
 }

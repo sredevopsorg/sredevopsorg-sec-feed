@@ -290,10 +290,11 @@ def test_sources_are_well_formed():
 
     ids = [source.id for source in SOURCES]
     assert len(ids) == len(set(ids))
+    assert "ossf-malicious" not in ids
     assert {"k8s-cve", "gcp", "alas", "kev", "ghsa-containerd"} <= set(ids)
     assert all(source.url.startswith("https://") for source in SOURCES)
     assert all(source.max_items > 0 for source in SOURCES)
-    kinds = {"rss", "nvd", "redhat-api", "ghsa", "kev", "ossf-malicious"}
+    kinds = {"rss", "nvd", "redhat-api", "ghsa", "kev"}
     assert {source.kind for source in SOURCES} <= kinds
 
 

@@ -48,7 +48,6 @@ Dependencies are declared in `pyproject.toml` and hash-locked in the committed
 | Storage | PostgreSQL primary store, SQLite fallback, in-memory cache |
 | Live updates | Server-Sent Events (`/api/events`) with polling fallback |
 | Enrichment | CISA Known Exploited Vulnerabilities + FIRST EPSS + OSV.dev |
-| Malware | OpenSSF Malicious Packages (recent OSV reports) |
 | Search | `/api/search` with SQL fallback (Postgres/SQLite) or optional OpenSearch |
 | Alerting | Discord webhook (primary) / Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
@@ -78,7 +77,6 @@ is hosted on a different origin from the API.
 | NVD CVE 2.0 (`linux kernel`, `kubernetes`, `cloud` queries) | JSON API | CVE |
 | CISA KEV — newly exploited (last 7 days) | JSON API | Exploited in the wild |
 | GHSA — containerd, runc, Helm, Argo CD, Istio | GitHub Advisory API | Kubernetes / cloud-native |
-| OpenSSF Malicious Packages (recent commits) | GitHub API | Supply-chain malware |
 | ZDI Published Advisories | RSS | Exploit / zero-day |
 | ZDI Upcoming Advisories | RSS | Exploit / zero-day |
 
@@ -103,10 +101,6 @@ is hosted on a different origin from the API.
   the unauthenticated 60-request/hour limit.
 - Amazon Linux 2023 publishes its full errata history in one feed (~1.5 MB);
   items are capped by `max_items`.
-- OpenSSF Malicious Packages uses the GitHub API and only processes new
-  commits (no 1 GB clone). Set `GITHUB_TOKEN` to avoid unauthenticated rate
-  limits. By default only Go/git ecosystems or packages mentioning
-  Linux/cloud/Kubernetes tooling are included.
 - ZDI Published and Upcoming are exploit/zero-day focused and are ingested
   without the Linux/cloud/Kubernetes relevance filter; their items carry the
   `zeroday` tag.
@@ -129,7 +123,6 @@ is hosted on a different origin from the API.
 │   ├── enrich.py         # CISA KEV + EPSS enrichment; KEV source builder
 │   ├── osv.py            # OSV.dev enrichment (affected/fixed/severity)
 │   ├── search.py         # Search backend (OpenSearch + SQL fallback)
-│   ├── ossf.py           # OpenSSF Malicious Packages GitHub-API source
 │   ├── store.py          # Storage facade/port (selects backend; ADR-0003)
 │   ├── sqlite_store.py   # SQLite storage adapter
 │   ├── postgres_store.py # PostgreSQL storage adapter
@@ -147,7 +140,6 @@ is hosted on a different origin from the API.
 ├── tests/
 │   ├── test_feed.py      # Feed normalization / dedup logic
 │   ├── test_osv.py       # OSV enrichment
-│   ├── test_ossf.py      # OpenSSF source
 │   ├── test_alerts.py    # Alert formatting
 │   ├── test_store.py     # SQLite persistence
 │   ├── test_postgres_store.py # PostgreSQL adapter (needs TEST_DATABASE_URL)
@@ -164,7 +156,8 @@ is hosted on a different origin from the API.
 ├── docs/
 │   ├── architecture.md   # Architecture review (C4) + delivery record
 │   ├── adr/              # Architecture Decision Records
-│   └── supabase-migration-plan.md # Hosted-Postgres analysis
+│   ├── supabase-migration-plan.md # Hosted-Postgres analysis
+│   └── supabase-improvements.md   # Proposed caching / search / Supabase features
 ├── deploy/
 │   └── k8s/              # Kubernetes manifests (api, frontend, NetworkPolicy,
 │                         #   postgres/PDB/Ingress/OpenSearch optional;
@@ -321,7 +314,7 @@ Without any channel configured, urgent items are logged only.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GITHUB_TOKEN` | unset | Raises GitHub API limits for OpenSSF Malicious Packages and the GHSA sources |
+| `GITHUB_TOKEN` | unset | Raises the GitHub API limits for the GHSA sources |
 | `NVD_WINDOW_DAYS` | `7` | Publication window per NVD query; the newest CVEs inside it enter the feed |
 | `KEV_SOURCE_DAYS` | `7` | How recently a CISA KEV addition must be added to enter the feed as an urgent item |
 | `EPSS_MAX_CVES` | `200` | Total CVEs scored per refresh (chunked into requests of 100); `0` removes the cap |
@@ -335,7 +328,7 @@ Without any channel configured, urgent items are logged only.
 | `RETENTION_DAYS` | `180` | Archive retention for non-sample rows; `0` disables pruning |
 
 Sources also carry a per-source minimum fetch interval (for example distro
-advisories every 30 minutes, NVD/GHSA hourly, OSSF every 10 minutes). Sources
+advisories every 30 minutes and NVD/GHSA hourly). Sources
 that send `ETag`/`Last-Modified` are fetched conditionally and an unchanged
 body is answered with `304`, reusing the last normalized payload.
 
@@ -647,9 +640,7 @@ Items are ordered by publication time, with urgency as a badge and tiebreaker.
 - **Tags** are inferred from source scope plus title/summary keywords. The
   core set is `linux`, `cloud`, `kubernetes`, `cve`, `exploit`, `patch`,
   `threat`; enrichment and the KEV source add `kev` for known-exploited CVEs,
-  the OpenSSF source adds `malware`, `supply-chain`, `malicious-packages`
-  plus the affected ecosystem (`go`, `npm`, …, lowercased), and the ZDI
-  sources add `zeroday`.
+  and the ZDI sources add `zeroday`.
 - **Severity** comes from CVSS when available, otherwise from textual heuristics.
 - **Urgent** items are critical/high-severity and exploitation-related, plus
   every KEV-source item (CISA has confirmed exploitation); they render the red

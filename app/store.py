@@ -20,7 +20,6 @@ __all__ = [
     "Storage",
     "StoreUnavailable",
     "close",
-    "get_source_cursor",
     "get_source_state",
     "init_db",
     "mark_alerted",
@@ -29,7 +28,6 @@ __all__ = [
     "query_feed",
     "search_feed",
     "seed_if_empty",
-    "set_source_cursor",
     "set_source_state",
     "stats",
     "unalerted_urgent_items",
@@ -57,10 +55,6 @@ class Storage(Protocol):
     def unalerted_urgent_items(self, limit: int = 20, db_path: str = DB_PATH) -> list[dict[str, Any]]: ...
 
     def mark_alerted(self, item_ids: list[str], db_path: str = DB_PATH) -> None: ...
-
-    def get_source_cursor(self, source_id: str, db_path: str = DB_PATH) -> str | None: ...
-
-    def set_source_cursor(self, source_id: str, cursor: str, db_path: str = DB_PATH) -> None: ...
 
     def get_source_state(self, source_id: str, db_path: str = DB_PATH) -> dict[str, Any] | None: ...
 
@@ -120,14 +114,6 @@ def unalerted_urgent_items(limit: int = 20, db_path: str = DB_PATH) -> list[dict
 
 def mark_alerted(item_ids: list[str], db_path: str = DB_PATH) -> None:
     return _backend.mark_alerted(item_ids, db_path)
-
-
-def get_source_cursor(source_id: str, db_path: str = DB_PATH) -> str | None:
-    return _backend.get_source_cursor(source_id, db_path)
-
-
-def set_source_cursor(source_id: str, cursor: str, db_path: str = DB_PATH) -> None:
-    return _backend.set_source_cursor(source_id, cursor, db_path)
 
 
 def get_source_state(source_id: str, db_path: str = DB_PATH) -> dict[str, Any] | None:
