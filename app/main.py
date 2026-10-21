@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import pipeline
+from . import VERSION, pipeline
 from . import search as search_backend
 from . import store
 from .config import settings
@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(store.close)
 
 
-app = FastAPI(title="Security Intelligence Live Feed API", version="1.1.2", lifespan=lifespan)
+app = FastAPI(title="Security Intelligence Live Feed API", version=VERSION, lifespan=lifespan)
 
 # CORS fails closed: with CORS_ORIGINS unset the allow-list is empty, so no
 # cross-origin caller is allowed. The bundled frontend is same-origin (nginx

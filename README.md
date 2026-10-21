@@ -53,7 +53,7 @@ Dependencies are declared in `pyproject.toml` and hash-locked in the committed
 | Alerting | Discord webhook (primary) / Slack webhook / SMTP email / log for urgent items |
 | Deployment | Docker/Podman compose + Kubernetes manifests |
 
-All roadmap items are complete for v1.1.1.
+All roadmap items are complete for v1.1.2.
 
 The frontend and backend are separate deployables: the backend is a pure JSON
 API (`/api/*`, `/health`) and the frontend is a static app served by nginx that
@@ -125,7 +125,7 @@ is hosted on a different origin from the API.
 │   ├── main.py           # FastAPI API routes (pure JSON API)
 │   ├── sources.py        # Source definitions
 │   ├── fetcher.py        # Fetching + normalization of upstream sources
-│   ├── pipeline.py       # Refresh orchestration: fetch → enrich → persist → index → publish → alert
+│   ├── pipeline.py       # Refresh orchestration: fetch → enrich → persist → prune → index → publish → alert
 │   ├── enrich.py         # CISA KEV + EPSS enrichment; KEV source builder
 │   ├── osv.py            # OSV.dev enrichment (affected/fixed/severity)
 │   ├── search.py         # Search backend (OpenSearch + SQL fallback)
@@ -324,6 +324,20 @@ Without any channel configured, urgent items are logged only.
 | `GITHUB_TOKEN` | unset | Raises GitHub API limits for OpenSSF Malicious Packages and the GHSA sources |
 | `NVD_WINDOW_DAYS` | `7` | Publication window per NVD query; the newest CVEs inside it enter the feed |
 | `KEV_SOURCE_DAYS` | `7` | How recently a CISA KEV addition must be added to enter the feed as an urgent item |
+| `EPSS_MAX_CVES` | `200` | Total CVEs scored per refresh (chunked into requests of 100); `0` removes the cap |
+| `OSV_MAX_CVES_PER_RUN` | `50` | CVEs fetched from OSV.dev per refresh, urgent/recent first; `0` removes the cap |
+
+### Refresh and retention environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FEED_CACHE_TTL` | `600` | Seconds before `/api/feed` schedules a background refresh; minimum `30` |
+| `RETENTION_DAYS` | `180` | Archive retention for non-sample rows; `0` disables pruning |
+
+Sources also carry a per-source minimum fetch interval (for example distro
+advisories every 30 minutes, NVD/GHSA hourly, OSSF every 10 minutes). Sources
+that send `ETag`/`Last-Modified` are fetched conditionally and an unchanged
+body is answered with `304`, reusing the last normalized payload.
 
 ### PostgreSQL + OpenSearch via Compose
 
@@ -526,10 +540,10 @@ SQLite on a volume, add a PVC back, mount it at `/app/data`, and set
 | `GET` | `/api/feed` | Normalized feed JSON |
 | `GET` | `/api/items` | Search/filter the persistent archive |
 | `GET` | `/api/search?q=...` | Full-text search (OpenSearch when configured, otherwise SQL — Postgres `ILIKE` or SQLite `LIKE`) |
-| `GET` | `/api/stats` | Counts by severity/tag (cached ~30 s; not a live query per request) |
+| `GET` | `/api/stats` | Counts by severity/tag plus enrichment coverage (cached ~30 s; not a live query per request) |
 | `GET` | `/api/events` | Server-Sent Events stream |
 | `GET` | `/api/sources` | Configured sources |
-| `GET` | `/health` | Liveness only: process/cache status, **no database query** |
+| `GET` | `/health` | Liveness only: process/cache status and pipeline step outcomes, **no database query** |
 | `GET` | `/ready` | Readiness: cheap database ping (`SELECT 1`), `503` when unreachable |
 
 ### `/api/feed`
@@ -624,7 +638,9 @@ through Compose's published port 8000) so the socket peer is used instead.
 
 `epss_score` is `null` when EPSS is unavailable or has no score for the item's
 CVEs, and `is_sample` is `true` only for the fallback rows the server serves
-while no live source is reachable.
+while no live source is reachable. `published` and `time_ago` are `null` when
+the source carries no parseable publication date — the feed never invents one.
+Items are ordered by publication time, with urgency as a badge and tiebreaker.
 
 ## Tagging and prioritization
 

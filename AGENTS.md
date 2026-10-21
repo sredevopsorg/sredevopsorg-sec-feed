@@ -65,7 +65,7 @@ app/models.py      Domain model (FeedItem) + serialization (ADR-0004)
 app/main.py        FastAPI API routes and app startup (pure JSON API)
 app/sources.py     Source definitions (add new feeds here)
 app/fetcher.py     Fetching + normalization of upstream sources
-app/pipeline.py    Refresh orchestration: fetch → enrich → persist → index → publish → alert
+app/pipeline.py    Refresh orchestration: fetch → enrich → persist → prune → index → publish → alert
 app/enrich.py      CISA KEV + FIRST EPSS enrichment, plus the KEV source (best-effort)
 app/osv.py         OSV.dev enrichment (affected/fixed/severity, best-effort)
 app/search.py      Search backend (OpenSearch if configured, SQL fallback)
@@ -195,7 +195,7 @@ uv.lock                      Committed, hash-locked dependency graph
     privileged `ADMIN_DATABASE_URL`; the API never receives that DSN.
 21. **The runtime database role is DML-only.** `DATABASE_URL` uses
     `feed_app.PROJECT-REF` (session-mode pooler) with
-    `SELECT/INSERT/UPDATE/DELETE` on the three tables only. It must not be able
+    `SELECT/INSERT/UPDATE/DELETE` on the app tables only. It must not be able
     to create roles/tables, `TRUNCATE`, or read `auth`/`storage`/`realtime`.
     The `postgres` role is for migrations and one-time bootstrap only. Keep
     `anon`/`authenticated` revoked on the app tables and keep the default
@@ -205,6 +205,20 @@ uv.lock                      Committed, hash-locked dependency graph
     every probe). `/ready` is the database readiness check (`SELECT 1` with a
     short timeout, `503` when unavailable). `/api/stats` is cached; do not
     reintroduce an unbounded aggregate into a probe path.
+23. **An unknown publication time stays `None`.** `item_to_dict()` must never
+    substitute `now` for a missing `published`; the API emits `null` for both
+    `published` and `time_ago` and the UI renders an em dash. Substituting `now`
+    made dateless items look freshly published on every request.
+24. **The archive is bounded.** `RETENTION_DAYS` (default 180, `0` disables)
+    drives the throttled `prune_items` pipeline step. Never prune sample rows.
+25. **A skipped source is not a failure.** `Source.min_interval_seconds` and
+    conditional GET (`ETag`/`Last-Modified` + `source_state.last_payload`) may
+    skip a fetch. A skipped source must not appear in `source_errors` and must
+    never trigger the sample fallback (that would overwrite a live archive).
+26. **Fetch state lives in `source_state`.** Conditional requests for RSS and
+    GHSA store validators and a capped last payload; a `304` without a usable
+    payload retries unconditionally once. Never let a state read/write failure
+    break a refresh.
 
 ## Feed item contract
 
@@ -230,7 +244,8 @@ Every item must be normalized to the `FeedItem` dataclass in
 - `is_sample` — true for fallback/sample rows
 
 The API returns these via `item_to_dict()`, which also computes `time_ago` and
-emits `is_sample`.
+emits `is_sample`. When `published` is `None`, both `published` and `time_ago`
+are emitted as `null`.
 
 ## When changing the UI
 
