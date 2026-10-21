@@ -94,6 +94,22 @@ def test_query_feed_orders_mixed_offsets_by_real_time(tmp_path):
     assert rows[0]["published"].endswith("+00:00")
 
 
+def test_query_feed_orders_by_publication_not_urgency(tmp_path):
+    """A fresh advisory outranks an older urgent one (urgency is a badge)."""
+    db = str(tmp_path / "feed.db")
+    init_db(db)
+    now = datetime.now(timezone.utc)
+    upsert_items(
+        [
+            make_item("old-urgent", "Old urgent", urgent=True, published=now - timedelta(days=2)),
+            make_item("new-calm", "New calm", urgent=False, published=now - timedelta(minutes=5)),
+        ],
+        db,
+    )
+    rows = query_feed(limit=10, db_path=db)
+    assert [row["id"] for row in rows] == ["new-calm", "old-urgent"]
+
+
 def test_patch_status_roundtrip(tmp_path):
     db = str(tmp_path / "feed.db")
     init_db(db)
