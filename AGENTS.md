@@ -137,8 +137,8 @@ uv.lock                      Committed, hash-locked dependency graph
 3. Add relevance filtering if the feed is broader than Linux/cloud/Kubernetes
    (see `_is_relevant()`).
 4. Add a unit test for the normalization/filtering logic with fixture data.
-5. Update the Sources table in `README.md` (including source-specific tags such
-   as `zeroday` for the ZDI feeds).
+5. Update the Sources table in `README.md` (including any source-specific tags;
+   the retired ZDI feeds used `zeroday`, which historical rows still carry).
 6. Enrichment (KEV/EPSS) is optional and best-effort; new enrichment goes in
    `app/enrich.py` and must never fail the whole refresh.
 7. Alerting is opt-in. Discord webhook is the first/primary alert option
@@ -227,8 +227,9 @@ Every item must be normalized to the `FeedItem` dataclass in
 - `title`, `summary`, `url`, `source`, `source_url`
 - `published` — timezone-aware UTC datetime or `None`
 - `tags` — core set `linux`, `cloud`, `kubernetes`, `cve`, `exploit`,
-  `patch`, `threat`; KEV enrichment and the KEV source add `kev`; the ZDI
-  sources add `zeroday`
+  `patch`, `threat`; KEV enrichment and the KEV source add `kev`. The retired
+  ZDI sources added `zeroday`; historical rows may still carry it, but no
+  active source emits it
 - `cves` — list of uppercase CVE IDs, e.g. `["CVE-2024-21626"]`
 - `severity` — `critical` | `high` | `medium` | `low` | `unknown`
 - `urgent` — boolean, drives the red dot in the UI
