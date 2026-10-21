@@ -36,6 +36,20 @@ def test_infer_severity():
     assert _infer_severity("ALAS2023-2026-0002 (low): vim") == "low"
 
 
+def test_ambiguous_tokens_need_word_boundaries():
+    """Short tokens must not match inside unrelated words."""
+    # "source"/"force" contain "rce"; neither is an RCE claim.
+    assert _infer_severity("The advisory source was updated") == "unknown"
+    assert _infer_severity("This will force a restart") == "unknown"
+    # "process" contains "poc"; "misused" contains "suse"; "adapt" contains "apt".
+    assert "exploit" not in _infer_tags("process the archive", frozenset(), [])
+    assert "linux" not in _infer_tags("a misused flag", frozenset(), [])
+    assert "threat" not in _infer_tags("adapt the config", frozenset(), [])
+    # The actual words still match.
+    assert _infer_severity("an RCE in kubelet") == "high"
+    assert "threat" in _infer_tags("APT actor activity", frozenset(), [])
+
+
 def test_infer_tags():
     tags = _infer_tags("Ubuntu Linux kernel kubernetes AWS exploited patch", frozenset({"source"}), ["CVE-2024-0001"])
     assert "linux" in tags
@@ -348,6 +362,43 @@ def test_fetch_recent_kev_filters_window_and_flags_urgent(monkeypatch):
     assert item.url == "https://nvd.nist.gov/vuln/detail/CVE-2026-0001"
     assert item.published == datetime.strptime(now.strftime("%Y-%m-%d"), "%Y-%m-%d").replace(tzinfo=timezone.utc)
     assert "Required action:" in item.summary
+    # No CVSS score, but the title says "remote code execution" -> high.
+    assert item.severity == "high"
+
+
+def test_fetch_recent_kev_uses_cvss_from_the_catalog_text(monkeypatch):
+    from types import SimpleNamespace
+
+    from app import enrich as enrich_module
+    from app.sources import Source
+
+    now = datetime.now(timezone.utc)
+    catalog = {
+        "CVE-2026-0010": {
+            "cveID": "CVE-2026-0010",
+            "dateAdded": now.strftime("%Y-%m-%d"),
+            "vulnerabilityName": "Acme kubelet flaw",
+            "shortDescription": "A flaw in kubelet.",
+            "notes": "CVSS v3 9.8: critical; see the vendor advisory.",
+        }
+    }
+
+    async def fake_kev():
+        return catalog
+
+    monkeypatch.setattr(enrich_module, "_fetch_kev", fake_kev)
+    monkeypatch.setattr(enrich_module, "settings", SimpleNamespace(kev_source_days=7))
+    source = Source(
+        id="kev",
+        name="KEV",
+        kind="kev",
+        url="https://example.test/kev",
+        tags=frozenset({"exploit", "kev"}),
+        max_items=10,
+    )
+    items = asyncio.run(enrich_module.fetch_recent_kev(source))
+    assert items[0].severity == "critical"
+    assert items[0].urgent is True
 
 
 def test_ghsa_uses_linked_cve_severity_and_html_url():
