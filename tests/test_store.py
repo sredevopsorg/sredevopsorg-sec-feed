@@ -74,6 +74,7 @@ def test_stats(tmp_path):
     assert s["total"] > 0
     assert "by_tag" in s
     assert "by_severity" in s
+    assert set(s["enriched"]) == {"kev", "epss", "osv"}
 
 
 def test_query_feed_orders_mixed_offsets_by_real_time(tmp_path):

@@ -406,6 +406,9 @@ def stats(db_path: str = "") -> dict[str, Any]:
         COUNT(*) AS total,
         COUNT(*) FILTER (WHERE NOT is_sample) AS live,
         COUNT(*) FILTER (WHERE urgent) AS urgent,
+        COUNT(*) FILTER (WHERE kev AND NOT is_sample) AS kev_count,
+        COUNT(*) FILTER (WHERE epss_score IS NOT NULL AND NOT is_sample) AS epss_count,
+        COUNT(*) FILTER (WHERE NOT is_sample AND jsonb_array_length(osv_affected) > 0) AS osv_count,
         MAX(last_seen) AS latest_seen,
         COALESCE(
             (SELECT jsonb_object_agg(severity, cnt) FROM (
@@ -432,6 +435,11 @@ def stats(db_path: str = "") -> dict[str, Any]:
         "urgent": row["urgent"],
         "by_severity": {k: int(v) for k, v in (row["by_severity"] or {}).items()},
         "by_tag": {k: int(v) for k, v in (row["by_tag"] or {}).items()},
+        "enriched": {
+            "kev": int(row["kev_count"]),
+            "epss": int(row["epss_count"]),
+            "osv": int(row["osv_count"]),
+        },
         "latest_seen": row["latest_seen"].isoformat() if row["latest_seen"] else None,
     }
 

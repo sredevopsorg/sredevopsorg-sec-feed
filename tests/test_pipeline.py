@@ -136,6 +136,28 @@ def test_completed_refresh_clears_the_in_flight_handle(monkeypatch):
     assert total == 2
 
 
+def test_failed_step_is_recorded_without_breaking_the_refresh(monkeypatch):
+    """A degraded step must be visible on the cache, not only in the logs."""
+
+    async def failing_index(items):
+        raise RuntimeError("opensearch down")
+
+    async def fake_fetch_all():
+        return [make_item("a")], []
+
+    _reset_pipeline(monkeypatch)
+    _stub_downstream(monkeypatch)
+    monkeypatch.setattr(pipeline, "_index", failing_index)
+    monkeypatch.setattr(fetcher, "fetch_all", fake_fetch_all)
+
+    items = asyncio.run(pipeline.refresh_feed())
+
+    assert [item.id for item in items] == ["a"]
+    assert pipeline.CACHE.steps["index"] == "error"
+    assert pipeline.CACHE.steps["persist"] == "ok"
+    assert pipeline.CACHE.steps["publish"] == "ok"
+
+
 def test_fetch_all_returns_items_and_errors(monkeypatch):
     async def fake_fetch(source: Source):
         if source.id == "boom":

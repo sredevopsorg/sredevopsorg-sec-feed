@@ -33,6 +33,9 @@ class FeedCache:
     fetched_at: datetime | None = None
     generated_at: datetime | None = None
     errors: list[str] = field(default_factory=list)
+    # Per-step outcome ("ok"/"error") so a degraded pipeline is visible, not
+    # only logged. Exposed on /health (in-memory; no database access).
+    steps: dict[str, str] = field(default_factory=dict)
 
 
 CACHE = FeedCache()
@@ -120,25 +123,34 @@ async def refresh_feed() -> list[FeedItem]:
         now = datetime.now(timezone.utc)
         CACHE = FeedCache(fetched_at=now, generated_at=now, errors=errors)
 
-        # Each downstream step is best-effort: a failure never breaks the feed.
+        # Each downstream step is best-effort: a failure never breaks the feed,
+        # but it does mark the step degraded so /health can report it.
         try:
             await asyncio.to_thread(_persist, items)
+            CACHE.steps["persist"] = "ok"
         except Exception:
+            CACHE.steps["persist"] = "error"
             logger.exception("Failed to persist feed items")
 
         try:
             await _index(items)
+            CACHE.steps["index"] = "ok"
         except Exception:
+            CACHE.steps["index"] = "error"
             logger.exception("Search indexing failed")
 
         try:
             await _publish(CACHE.generated_at, len(items))
+            CACHE.steps["publish"] = "ok"
         except Exception:
+            CACHE.steps["publish"] = "error"
             logger.exception("Event publishing failed")
 
         try:
             await _alert()
+            CACHE.steps["alert"] = "ok"
         except Exception:
+            CACHE.steps["alert"] = "error"
             logger.exception("Alerting failed")
 
         return items

@@ -112,6 +112,7 @@ def test_health_does_not_query_the_database(monkeypatch):
     result = asyncio.run(main.health())
     assert result["status"] == "ok"
     assert "db_total" not in result
+    assert "pipeline" in result
 
 
 def test_ready_ok(monkeypatch):

@@ -263,6 +263,13 @@ def stats(db_path: str = DB_PATH) -> dict[str, Any]:
             for tag in json.loads(tags_json or "[]"):
                 by_tag[tag] = by_tag.get(tag, 0) + 1
         urgent = conn.execute("SELECT COUNT(*) FROM feed_items WHERE urgent=1").fetchone()[0]
+        kev = conn.execute("SELECT COUNT(*) FROM feed_items WHERE kev=1 AND is_sample=0").fetchone()[0]
+        epss = conn.execute(
+            "SELECT COUNT(*) FROM feed_items WHERE epss_score IS NOT NULL AND is_sample=0"
+        ).fetchone()[0]
+        osv = conn.execute(
+            "SELECT COUNT(*) FROM feed_items WHERE is_sample=0 AND osv_affected NOT IN ('[]', '')"
+        ).fetchone()[0]
         latest = conn.execute("SELECT MAX(last_seen) FROM feed_items").fetchone()[0]
     return {
         "total": total,
@@ -271,6 +278,7 @@ def stats(db_path: str = DB_PATH) -> dict[str, Any]:
         "urgent": urgent,
         "by_severity": by_severity,
         "by_tag": by_tag,
+        "enriched": {"kev": kev, "epss": epss, "osv": osv},
         "latest_seen": latest,
     }
 

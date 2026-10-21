@@ -234,10 +234,11 @@ def test_kev_marks_urgent_and_tags(monkeypatch):
     assert {"kev", "exploit"} <= item.tags
 
 
-def test_epss_request_is_capped_not_chunked(monkeypatch):
+def test_epss_request_honours_the_configured_cap(monkeypatch):
     from app import enrich as enrich_module
+    from app.config import Settings
 
-    captured: dict = {}
+    batches: list[list[str]] = []
 
     class FakeResponse:
         def raise_for_status(self) -> None:
@@ -254,14 +255,15 @@ def test_epss_request_is_capped_not_chunked(monkeypatch):
             return False
 
         async def get(self, url, params=None):
-            captured["params"] = params
+            batches.append(params["cve"].split(","))
             return FakeResponse()
 
     monkeypatch.setattr(enrich_module.http_client, "client", lambda **kwargs: FakeClient())
-    over_cap = [f"CVE-2024-{i:04d}" for i in range(enrich_module.EPSS_MAX_CVES + 25)]
+    monkeypatch.setattr(enrich_module, "settings", Settings.from_env({"EPSS_MAX_CVES": "10"}))
+    cves = [f"CVE-2024-{i:04d}" for i in range(25)]
 
-    assert asyncio.run(enrich_module._fetch_epss(over_cap)) == {}
-    assert captured["params"]["cve"].count(",") == enrich_module.EPSS_MAX_CVES - 1
+    assert asyncio.run(enrich_module._fetch_epss(cves)) == {}
+    assert [len(batch) for batch in batches] == [10]
 
 
 def test_is_relevant_filters_only_the_broad_sources():
@@ -537,3 +539,35 @@ def test_fetch_all_does_not_serve_samples_when_sources_are_skipped(monkeypatch):
     items, errors = asyncio.run(fetcher.fetch_all())
     assert items == []
     assert errors == []
+
+
+def test_epss_requests_are_chunked_at_one_hundred(monkeypatch):
+    from app import enrich as enrich_module
+    from app.config import Settings
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"data": []}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, params=None):
+            calls.append(params["cve"].split(","))
+            return FakeResponse()
+
+    monkeypatch.setattr(enrich_module.http_client, "client", lambda **kw: FakeClient())
+    monkeypatch.setattr(enrich_module, "settings", Settings.from_env({"EPSS_MAX_CVES": "250"}))
+
+    cves = [f"CVE-2024-{i:04d}" for i in range(250)]
+    assert asyncio.run(enrich_module._fetch_epss(cves)) == {}
+    assert [len(batch) for batch in calls] == [100, 100, 50]

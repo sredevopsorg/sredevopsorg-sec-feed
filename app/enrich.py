@@ -32,9 +32,9 @@ EPSS_URL = "https://api.first.org/data/v1/epss"
 _kev_cache: dict[str, dict] | None = None
 _kev_fetched_at: float | None = None
 KEV_TTL = 24 * 60 * 60  # seconds
-# EPSS scores are requested in a single call; CVEs beyond this cap stay
-# unscored rather than being chunked into extra requests.
-EPSS_MAX_CVES = 100
+# The FIRST API accepts at most 100 CVEs per request (it reports limit: 100),
+# so larger batches are chunked rather than silently dropping the tail.
+EPSS_BATCH_SIZE = 100
 
 
 async def _fetch_kev() -> dict[str, dict]:
@@ -56,17 +56,20 @@ async def _fetch_kev() -> dict[str, dict]:
 async def _fetch_epss(cves: list[str]) -> dict[str, float]:
     if not cves:
         return {}
-    cves = sorted(set(cves))[:EPSS_MAX_CVES]
-    async with http_client.client() as client:
-        resp = await client.get(EPSS_URL, params={"cve": ",".join(cves)})
-        resp.raise_for_status()
-        data = resp.json()
+    unique = sorted(set(cves))
+    if settings.epss_max_cves > 0:
+        unique = unique[: settings.epss_max_cves]
     out: dict[str, float] = {}
-    for row in data.get("data", []):
-        cve = (row.get("cve") or "").upper()
-        epss = row.get("epss")
-        if cve and isinstance(epss, (int, float)):
-            out[cve] = float(epss)
+    async with http_client.client() as client:
+        for start in range(0, len(unique), EPSS_BATCH_SIZE):
+            batch = unique[start : start + EPSS_BATCH_SIZE]
+            resp = await client.get(EPSS_URL, params={"cve": ",".join(batch)})
+            resp.raise_for_status()
+            for row in resp.json().get("data", []):
+                cve = (row.get("cve") or "").upper()
+                epss = row.get("epss")
+                if cve and isinstance(epss, (int, float)):
+                    out[cve] = float(epss)
     return out
 
 
