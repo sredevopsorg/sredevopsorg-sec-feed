@@ -1,6 +1,9 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import httpx
+
+import app.fetcher as fetcher
 from app.fetcher import (
     _dedupe,
     _ensure_aware,
@@ -350,9 +353,13 @@ def test_fetch_recent_kev_filters_window_and_flags_urgent(monkeypatch):
     assert "Required action:" in item.summary
 
 
-def test_ghsa_uses_linked_cve_severity_and_html_url():
+def test_ghsa_uses_linked_cve_severity_and_html_url(monkeypatch):
     from app.fetcher import GHSA_SEVERITY, _fetch_ghsa
     from app.sources import Source
+
+    # Keep the test off the default store (and off the network).
+    monkeypatch.setattr(fetcher.store, "get_source_state", lambda sid: None)
+    monkeypatch.setattr(fetcher.store, "set_source_state", lambda sid, **kw: None)
 
     # Current advisories use MEDIUM; older entries use MODERATE.
     assert GHSA_SEVERITY["MEDIUM"] == "medium"
@@ -369,6 +376,9 @@ def test_ghsa_uses_linked_cve_severity_and_html_url():
     }
 
     class FakeResponse:
+        status_code = 200
+        headers: dict = {}
+
         def raise_for_status(self) -> None:
             return None
 
@@ -397,3 +407,82 @@ def test_ghsa_uses_linked_cve_severity_and_html_url():
     assert item.url == "https://github.com/advisories/GHSA-xxxx-xxxx-xxxx"
     assert {"kubernetes", "cve"} <= item.tags
     assert item.published == datetime(2026, 10, 1, 10, 0, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Conditional fetch (ETag / Last-Modified) and interval skipping
+# ---------------------------------------------------------------------------
+
+_RSS_BODY = b"""<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+<item><title>USN-1: linux kernel vulnerability</title><link>https://example.com/1</link>
+<description>fixed in the kernel</description></item></channel></rss>"""
+
+
+class _FakeFetchClient:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    async def get(self, url, headers=None):
+        self.calls.append(dict(headers or {}))
+        return self.responses.pop(0)
+
+
+def _response(status, url, body=b"", headers=None):
+    return httpx.Response(status, content=body, headers=headers or {}, request=httpx.Request("GET", url))
+
+
+def test_rss_sends_validators_and_reuses_the_payload_on_304(monkeypatch):
+    from app.models import FeedItem, item_to_dict
+    from app.sources import Source
+
+    item = FeedItem(
+        id="cached", title="cached", summary="s", url="https://e/1",
+        source="s", source_url="u", published=None,
+    )
+    state = {"etag": '"v1"', "last_modified": None, "last_payload": [item_to_dict(item)]}
+    saved = {}
+    monkeypatch.setattr(fetcher.store, "get_source_state", lambda sid: state)
+    monkeypatch.setattr(fetcher.store, "set_source_state", lambda sid, **kw: saved.update(kw))
+    source = Source(id="ubuntu", name="Ubuntu", kind="rss", url="https://example.com/feed")
+    client = _FakeFetchClient([_response(304, source.url, headers={"etag": '"v1"'})])
+
+    items = asyncio.run(fetcher._fetch_rss(source, client))
+
+    assert [i.id for i in items] == ["cached"]
+    assert client.calls[0]["If-None-Match"] == '"v1"'
+    assert saved["ok"] is True
+
+
+def test_rss_304_without_a_stored_payload_refetches(monkeypatch):
+    from app.sources import Source
+
+    monkeypatch.setattr(fetcher.store, "get_source_state", lambda sid: {"etag": '"v1"', "last_payload": None})
+    monkeypatch.setattr(fetcher.store, "set_source_state", lambda sid, **kw: None)
+    source = Source(id="ubuntu", name="Ubuntu", kind="rss", url="https://example.com/feed")
+    client = _FakeFetchClient([
+        _response(304, source.url, headers={"etag": '"v1"'}),
+        _response(200, source.url, body=_RSS_BODY, headers={"etag": '"v2"'}),
+    ])
+
+    items = asyncio.run(fetcher._fetch_rss(source, client))
+
+    assert items and items[0].title.startswith("USN-1")
+    assert client.calls[1] == {}  # retried without validators
+
+
+def test_fetch_all_does_not_serve_samples_when_sources_are_skipped(monkeypatch):
+    from app.sources import Source
+
+    async def skipped(source):
+        return fetcher.SKIPPED
+
+    monkeypatch.setattr(fetcher, "_fetch_source", skipped)
+    monkeypatch.setattr(
+        fetcher, "SOURCES",
+        [Source(id="ubuntu", name="Ubuntu", kind="rss", url="https://example.com/feed")],
+    )
+
+    items, errors = asyncio.run(fetcher.fetch_all())
+    assert items == []
+    assert errors == []

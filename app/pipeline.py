@@ -17,6 +17,7 @@ from . import alerts
 from . import fetcher
 from . import search
 from . import store
+from .config import settings
 from .enrich import enrich_items
 from .events import broker
 from .models import FeedItem
@@ -24,7 +25,7 @@ from .osv import enrich_with_osv
 
 logger = logging.getLogger(__name__)
 
-CACHE_TTL = 600  # seconds
+# Refresh cadence is operator-visible (FEED_CACHE_TTL); see app/config.py.
 
 
 @dataclass
@@ -150,6 +151,6 @@ async def get_feed() -> FeedCache:
     unreachable upstream sources (the API always answers from the store). The
     refresh itself runs single-flight in the background.
     """
-    if CACHE.fetched_at is None or (datetime.now(timezone.utc) - CACHE.fetched_at).total_seconds() > CACHE_TTL:
+    if CACHE.fetched_at is None or (datetime.now(timezone.utc) - CACHE.fetched_at).total_seconds() > settings.feed_cache_ttl:
         schedule_refresh()
     return CACHE

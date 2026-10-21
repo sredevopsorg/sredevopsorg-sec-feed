@@ -7,6 +7,7 @@ depend only on this module — never on a concrete backend (ADR-0003).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Protocol
 
 from .config import settings
@@ -20,6 +21,7 @@ __all__ = [
     "StoreUnavailable",
     "close",
     "get_source_cursor",
+    "get_source_state",
     "init_db",
     "mark_alerted",
     "ping",
@@ -27,6 +29,7 @@ __all__ = [
     "search_feed",
     "seed_if_empty",
     "set_source_cursor",
+    "set_source_state",
     "stats",
     "unalerted_urgent_items",
     "upsert_items",
@@ -57,6 +60,21 @@ class Storage(Protocol):
     def get_source_cursor(self, source_id: str, db_path: str = DB_PATH) -> str | None: ...
 
     def set_source_cursor(self, source_id: str, cursor: str, db_path: str = DB_PATH) -> None: ...
+
+    def get_source_state(self, source_id: str, db_path: str = DB_PATH) -> dict[str, Any] | None: ...
+
+    def set_source_state(
+        self,
+        source_id: str,
+        *,
+        etag: str | None,
+        last_modified: str | None,
+        fetched_at: datetime | None,
+        ok: bool,
+        error: str | None,
+        payload: list[dict[str, Any]] | None,
+        db_path: str = DB_PATH,
+    ) -> None: ...
 
     def ping(self, db_path: str = DB_PATH) -> bool: ...
 
@@ -107,6 +125,33 @@ def get_source_cursor(source_id: str, db_path: str = DB_PATH) -> str | None:
 
 def set_source_cursor(source_id: str, cursor: str, db_path: str = DB_PATH) -> None:
     return _backend.set_source_cursor(source_id, cursor, db_path)
+
+
+def get_source_state(source_id: str, db_path: str = DB_PATH) -> dict[str, Any] | None:
+    return _backend.get_source_state(source_id, db_path)
+
+
+def set_source_state(
+    source_id: str,
+    *,
+    etag: str | None,
+    last_modified: str | None,
+    fetched_at: datetime | None,
+    ok: bool,
+    error: str | None,
+    payload: list[dict[str, Any]] | None,
+    db_path: str = DB_PATH,
+) -> None:
+    return _backend.set_source_state(
+        source_id,
+        etag=etag,
+        last_modified=last_modified,
+        fetched_at=fetched_at,
+        ok=ok,
+        error=error,
+        payload=payload,
+        db_path=db_path,
+    )
 
 
 def ping(db_path: str = DB_PATH) -> bool:

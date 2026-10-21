@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS source_cursors (
     cursor TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS source_state (
+    source_id TEXT PRIMARY KEY,
+    etag TEXT,
+    last_modified TEXT,
+    last_fetched_at TEXT,
+    last_ok_at TEXT,
+    last_error TEXT,
+    last_payload TEXT
+);
 """
 
 
@@ -349,6 +358,61 @@ def set_source_cursor(source_id: str, cursor: str, db_path: str = DB_PATH) -> No
             "INSERT INTO source_cursors (source_id, cursor, updated_at) VALUES (?, ?, ?) "
             "ON CONFLICT(source_id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at",
             (source_id, cursor, _now_iso()),
+        )
+
+
+def get_source_state(source_id: str, db_path: str = DB_PATH) -> dict[str, Any] | None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM source_state WHERE source_id = ?", (source_id,)).fetchone()
+    if row is None:
+        return None
+    return {
+        "source_id": row["source_id"],
+        "etag": row["etag"],
+        "last_modified": row["last_modified"],
+        "last_fetched_at": row["last_fetched_at"],
+        "last_ok_at": row["last_ok_at"],
+        "last_error": row["last_error"],
+        "last_payload": json.loads(row["last_payload"]) if row["last_payload"] else None,
+    }
+
+
+def set_source_state(
+    source_id: str,
+    *,
+    etag: str | None,
+    last_modified: str | None,
+    fetched_at: datetime | None,
+    ok: bool,
+    error: str | None,
+    payload: list[dict[str, Any]] | None,
+    db_path: str = DB_PATH,
+) -> None:
+    """Record one fetch attempt, preserving validators/payload when not supplied."""
+    now = _now_iso()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO source_state
+                (source_id, etag, last_modified, last_fetched_at, last_ok_at, last_error, last_payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                etag = COALESCE(excluded.etag, source_state.etag),
+                last_modified = COALESCE(excluded.last_modified, source_state.last_modified),
+                last_fetched_at = excluded.last_fetched_at,
+                last_ok_at = COALESCE(excluded.last_ok_at, source_state.last_ok_at),
+                last_error = excluded.last_error,
+                last_payload = COALESCE(excluded.last_payload, source_state.last_payload)
+            """,
+            (
+                source_id,
+                etag,
+                last_modified,
+                _iso(fetched_at) if fetched_at is not None else now,
+                now if ok else None,
+                error,
+                json.dumps(payload) if payload is not None else None,
+            ),
         )
 
 

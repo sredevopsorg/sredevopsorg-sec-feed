@@ -102,6 +102,37 @@ def item_to_dict(item: FeedItem, now: datetime | None = None) -> dict[str, Any]:
     }
 
 
+def item_from_dict(data: dict[str, Any]) -> FeedItem:
+    """Rebuild a FeedItem from item_to_dict output (a stored source payload)."""
+    published = data.get("published")
+    published_dt: datetime | None = None
+    if published:
+        try:
+            published_dt = _ensure_aware(datetime.fromisoformat(str(published).replace("Z", "+00:00")))
+        except ValueError:
+            published_dt = None
+    return FeedItem(
+        id=data["id"],
+        title=data.get("title") or "",
+        summary=data.get("summary") or "",
+        url=data.get("url") or "",
+        source=data.get("source") or "",
+        source_url=data.get("source_url") or "",
+        published=published_dt,
+        tags=set(data.get("tags") or []),
+        cves=list(data.get("cves") or []),
+        severity=data.get("severity") or "unknown",
+        urgent=bool(data.get("urgent")),
+        kev=bool(data.get("kev")),
+        epss_score=data.get("epss_score"),
+        is_sample=bool(data.get("is_sample")),
+        osv_affected=list(data.get("osv_affected") or []),
+        osv_fixed=list(data.get("osv_fixed") or []),
+        osv_severity=data.get("osv_severity"),
+        patch_status=data.get("patch_status") or "unknown",
+    )
+
+
 def _sample_items() -> list[FeedItem]:
     """Return a small set of realistic fallback items used when every live
     source fails, so the frontend never renders an empty feed."""

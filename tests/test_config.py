@@ -32,6 +32,10 @@ def test_settings_defaults():
     assert s.max_sse_subscribers == 100
     assert s.nvd_window_days == 7
     assert s.kev_source_days == 7
+    assert s.feed_cache_ttl == 600
+    assert s.retention_days == 180
+    assert s.epss_max_cves == 200
+    assert s.osv_max_cves_per_run == 50
 
 
 def test_settings_cors_denies_by_default():
@@ -101,6 +105,22 @@ def test_settings_source_windows_parsing():
     assert s.nvd_window_days == 3
     assert s.kev_source_days == 14
     assert Settings.from_env({"NVD_WINDOW_DAYS": "nope"}).nvd_window_days == 7
+
+
+def test_settings_refresh_and_retention_parsing():
+    s = Settings.from_env({
+        "FEED_CACHE_TTL": "120",
+        "RETENTION_DAYS": "30",
+        "EPSS_MAX_CVES": "50",
+        "OSV_MAX_CVES_PER_RUN": "10",
+    })
+    assert s.feed_cache_ttl == 120
+    assert s.retention_days == 30
+    assert s.epss_max_cves == 50
+    assert s.osv_max_cves_per_run == 10
+    # A TTL below the floor would hammer upstreams; retention 0 disables.
+    assert Settings.from_env({"FEED_CACHE_TTL": "1"}).feed_cache_ttl == 30
+    assert Settings.from_env({"RETENTION_DAYS": "-5"}).retention_days == 0
 
 
 def test_settings_optional_values():
